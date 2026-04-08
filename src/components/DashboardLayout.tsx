@@ -1,4 +1,4 @@
-import { useLocation, Outlet } from "react-router-dom";
+import { Outlet } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import {
   Sidebar,
@@ -14,7 +14,7 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { NavLink } from "@/components/NavLink";
-import { Building2, LayoutDashboard, Users, CalendarDays, FileText, User, LogOut } from "lucide-react";
+import { Building2, LayoutDashboard, Users, CalendarDays, FileText, User, LogOut, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 const adminItems = [
@@ -22,6 +22,8 @@ const adminItems = [
   { title: "Employees", url: "/admin/employees", icon: Users },
   { title: "Leave Requests", url: "/admin/leaves", icon: CalendarDays },
   { title: "Documents", url: "/admin/documents", icon: FileText },
+  { title: "My Profile", url: "/admin/profile", icon: User },
+  { title: "Settings", url: "/admin/settings", icon: Settings },
 ];
 
 const employeeItems = [
@@ -29,6 +31,7 @@ const employeeItems = [
   { title: "Profile", url: "/employee/profile", icon: User },
   { title: "Documents", url: "/employee/documents", icon: FileText },
   { title: "Leave", url: "/employee/leave", icon: CalendarDays },
+  { title: "Settings", url: "/employee/settings", icon: Settings },
 ];
 
 function AppSidebar() {

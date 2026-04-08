@@ -1,10 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -20,8 +20,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
-import { UserPlus, Search, Loader2 } from "lucide-react";
+import { UserPlus, Search, Loader2, ArrowUp, ArrowDown, ChevronLeft, ChevronRight } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 interface Employee {
@@ -35,9 +34,14 @@ interface Employee {
   created_at: string;
 }
 
+type SortKey = "name" | "email" | "status" | "created_at";
+type SortDir = "asc" | "desc";
+const PAGE_SIZE = 10;
+
 export default function EmployeeList() {
   const { toast } = useToast();
   const [employees, setEmployees] = useState<Employee[]>([]);
+  const [adminUserIds, setAdminUserIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -45,10 +49,18 @@ export default function EmployeeList() {
   const [inviteName, setInviteName] = useState("");
   const [inviting, setInviting] = useState(false);
   const [filter, setFilter] = useState<"all" | "active" | "inactive" | "invited">("all");
+  const [sortKey, setSortKey] = useState<SortKey>("created_at");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const [page, setPage] = useState(1);
 
   const fetchEmployees = async () => {
-    const { data } = await supabase.from("employee_profiles").select("*").order("created_at", { ascending: false });
-    setEmployees(data ?? []);
+    const [{ data: profiles }, { data: roles }] = await Promise.all([
+      supabase.from("employee_profiles").select("*").order("created_at", { ascending: false }),
+      supabase.from("user_roles").select("user_id, role").eq("role", "admin" as any),
+    ]);
+    const adminIds = new Set((roles ?? []).map((r) => r.user_id));
+    setAdminUserIds(adminIds);
+    setEmployees(profiles ?? []);
     setLoading(false);
   };
 
@@ -61,7 +73,6 @@ export default function EmployeeList() {
       const token = crypto.randomUUID();
       const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
 
-      // Create invitation
       const { error: invError } = await supabase.from("invitations").insert({
         email: inviteEmail,
         token,
@@ -69,17 +80,14 @@ export default function EmployeeList() {
       });
       if (invError) throw invError;
 
-      // Create user via signup (auto-confirm should be enabled for admin-initiated invites)
       const tempPassword = crypto.randomUUID();
       const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
         email: inviteEmail,
         password: tempPassword,
         options: { data: { name: inviteName } },
       });
-
       if (signUpError) throw signUpError;
 
-      // Assign employee role
       if (signUpData.user) {
         await supabase.from("user_roles").insert({ user_id: signUpData.user.id, role: "employee" as any });
         await supabase.from("employee_profiles").update({ name: inviteName, status: "invited" }).eq("user_id", signUpData.user.id);
@@ -97,18 +105,47 @@ export default function EmployeeList() {
     }
   };
 
-  const filteredEmployees = employees.filter((e) => {
-    const matchSearch = e.name.toLowerCase().includes(search.toLowerCase()) || e.email.toLowerCase().includes(search.toLowerCase());
-    const matchFilter = filter === "all" || e.status === filter;
-    return matchSearch && matchFilter;
-  });
+  const handleSort = (key: SortKey) => {
+    if (sortKey === key) {
+      setSortDir(sortDir === "asc" ? "desc" : "asc");
+    } else {
+      setSortKey(key);
+      setSortDir("asc");
+    }
+    setPage(1);
+  };
+
+  const SortIcon = ({ col }: { col: SortKey }) => {
+    if (sortKey !== col) return null;
+    return sortDir === "asc" ? <ArrowUp className="h-3 w-3 ml-1 inline" /> : <ArrowDown className="h-3 w-3 ml-1 inline" />;
+  };
+
+  // Filter out admins, then apply search + status filter + sort + pagination
+  const processed = useMemo(() => {
+    let list = employees.filter((e) => !adminUserIds.has(e.user_id));
+    
+    // Search
+    if (search) {
+      const s = search.toLowerCase();
+      list = list.filter((e) => e.name.toLowerCase().includes(s) || e.email.toLowerCase().includes(s));
+    }
+    // Status filter
+    if (filter !== "all") list = list.filter((e) => e.status === filter);
+    // Sort
+    list = [...list].sort((a, b) => {
+      const aVal = (a[sortKey] ?? "").toString().toLowerCase();
+      const bVal = (b[sortKey] ?? "").toString().toLowerCase();
+      return sortDir === "asc" ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
+    });
+    return list;
+  }, [employees, adminUserIds, search, filter, sortKey, sortDir]);
+
+  const totalPages = Math.max(1, Math.ceil(processed.length / PAGE_SIZE));
+  const paged = processed.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const nonAdminCount = employees.filter((e) => !adminUserIds.has(e.user_id)).length;
 
   const statusBadge = (status: string) => {
-    const map: Record<string, string> = {
-      active: "status-badge-active",
-      inactive: "status-badge-inactive",
-      invited: "status-badge-pending",
-    };
+    const map: Record<string, string> = { active: "status-badge-active", inactive: "status-badge-inactive", invited: "status-badge-pending" };
     return <span className={map[status] || "status-badge-inactive"}>{status}</span>;
   };
 
@@ -117,16 +154,14 @@ export default function EmployeeList() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">Employees</h1>
-          <p className="text-muted-foreground">{employees.length} total employees</p>
+          <p className="text-muted-foreground">{nonAdminCount} total employees</p>
         </div>
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogTrigger asChild>
             <Button><UserPlus className="mr-2 h-4 w-4" /> Add Employee</Button>
           </DialogTrigger>
           <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Invite New Employee</DialogTitle>
-            </DialogHeader>
+            <DialogHeader><DialogTitle>Invite New Employee</DialogTitle></DialogHeader>
             <form onSubmit={handleInvite} className="space-y-4">
               <div className="space-y-2">
                 <Label>Full Name</Label>
@@ -149,13 +184,11 @@ export default function EmployeeList() {
           <div className="flex flex-col sm:flex-row gap-3">
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input placeholder="Search employees..." className="pl-9" value={search} onChange={(e) => setSearch(e.target.value)} />
+              <Input placeholder="Search employees..." className="pl-9" value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} />
             </div>
             <div className="flex gap-2">
               {(["all", "active", "inactive", "invited"] as const).map((f) => (
-                <Button key={f} variant={filter === f ? "default" : "outline"} size="sm" onClick={() => setFilter(f)} className="capitalize">
-                  {f}
-                </Button>
+                <Button key={f} variant={filter === f ? "default" : "outline"} size="sm" onClick={() => { setFilter(f); setPage(1); }} className="capitalize">{f}</Button>
               ))}
             </div>
           </div>
@@ -164,20 +197,20 @@ export default function EmployeeList() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Email</TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => handleSort("name")}>Name <SortIcon col="name" /></TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => handleSort("email")}>Email <SortIcon col="email" /></TableHead>
                 <TableHead>Phone</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Joined</TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => handleSort("status")}>Status <SortIcon col="status" /></TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => handleSort("created_at")}>Joined <SortIcon col="created_at" /></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {loading ? (
                 <TableRow><TableCell colSpan={5} className="text-center py-8"><Loader2 className="animate-spin mx-auto" /></TableCell></TableRow>
-              ) : filteredEmployees.length === 0 ? (
+              ) : paged.length === 0 ? (
                 <TableRow><TableCell colSpan={5} className="text-center py-8 text-muted-foreground">No employees found</TableCell></TableRow>
               ) : (
-                filteredEmployees.map((emp) => (
+                paged.map((emp) => (
                   <TableRow key={emp.id}>
                     <TableCell className="font-medium">{emp.name || "—"}</TableCell>
                     <TableCell>{emp.email}</TableCell>
@@ -189,6 +222,26 @@ export default function EmployeeList() {
               )}
             </TableBody>
           </Table>
+
+          {/* Pagination */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between mt-4 pt-4 border-t">
+              <p className="text-sm text-muted-foreground">
+                Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, processed.length)} of {processed.length}
+              </p>
+              <div className="flex gap-1">
+                <Button variant="outline" size="sm" disabled={page === 1} onClick={() => setPage(page - 1)}>
+                  <ChevronLeft className="h-4 w-4" />
+                </Button>
+                {Array.from({ length: totalPages }, (_, i) => i + 1).map((p) => (
+                  <Button key={p} variant={page === p ? "default" : "outline"} size="sm" onClick={() => setPage(p)} className="w-8">{p}</Button>
+                ))}
+                <Button variant="outline" size="sm" disabled={page === totalPages} onClick={() => setPage(page + 1)}>
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>
