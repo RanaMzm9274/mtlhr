@@ -11,10 +11,12 @@ import AdminDashboard from "@/pages/admin/AdminDashboard";
 import EmployeeList from "@/pages/admin/EmployeeList";
 import AdminLeaves from "@/pages/admin/AdminLeaves";
 import AdminDocuments from "@/pages/admin/AdminDocuments";
+import AdminProfile from "@/pages/admin/AdminProfile";
 import EmployeeDashboard from "@/pages/employee/EmployeeDashboard";
 import EmployeeProfile from "@/pages/employee/EmployeeProfile";
 import EmployeeDocuments from "@/pages/employee/EmployeeDocuments";
 import EmployeeLeave from "@/pages/employee/EmployeeLeave";
+import SettingsPage from "@/pages/SettingsPage";
 import NotFound from "@/pages/NotFound";
 import { Loader2 } from "lucide-react";
 
@@ -62,6 +64,8 @@ function AppRoutes() {
         <Route path="employees" element={<EmployeeList />} />
         <Route path="leaves" element={<AdminLeaves />} />
         <Route path="documents" element={<AdminDocuments />} />
+        <Route path="profile" element={<AdminProfile />} />
+        <Route path="settings" element={<SettingsPage />} />
       </Route>
 
       {/* Employee routes */}
@@ -70,6 +74,7 @@ function AppRoutes() {
         <Route path="profile" element={<EmployeeProfile />} />
         <Route path="documents" element={<EmployeeDocuments />} />
         <Route path="leave" element={<EmployeeLeave />} />
+        <Route path="settings" element={<SettingsPage />} />
       </Route>
 
       <Route path="*" element={<NotFound />} />
