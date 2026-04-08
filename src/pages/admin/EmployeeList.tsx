@@ -11,7 +11,19 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
+  DialogFooter,
+  DialogDescription,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
   Table,
   TableBody,
@@ -20,7 +32,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { UserPlus, Search, Loader2, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, Copy, CheckCircle2 } from "lucide-react";
+import { UserPlus, Search, Loader2, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, Copy, CheckCircle2, Trash2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 interface Employee {
@@ -57,6 +69,11 @@ export default function EmployeeList() {
   const [page, setPage] = useState(1);
   const [copied, setCopied] = useState(false);
 
+  // Delete state - two-step confirmation
+  const [deleteTarget, setDeleteTarget] = useState<Employee | null>(null);
+  const [deleteStep, setDeleteStep] = useState<1 | 2>(1);
+  const [deleting, setDeleting] = useState(false);
+
   const fetchEmployees = async () => {
     const [{ data: profiles }, { data: roles }] = await Promise.all([
       supabase.from("employee_profiles").select("*").order("created_at", { ascending: false }),
@@ -86,7 +103,6 @@ export default function EmployeeList() {
       } as any);
       if (invError) throw invError;
 
-      // Generate invitation link
       const link = `${window.location.origin}/set-password?token=${token}`;
       setInviteLink(link);
 
@@ -125,6 +141,39 @@ export default function EmployeeList() {
       setSortDir("asc");
     }
     setPage(1);
+  };
+
+  const handleDeleteClick = (emp: Employee) => {
+    setDeleteTarget(emp);
+    setDeleteStep(1);
+  };
+
+  const handleDeleteStep1Confirm = () => {
+    setDeleteStep(2);
+  };
+
+  const handleDeleteFinalConfirm = async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("delete-employee", {
+        body: { user_id: deleteTarget.user_id },
+      });
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+      toast({ title: "Employee deleted", description: `${deleteTarget.name || deleteTarget.email} has been permanently removed.` });
+      setDeleteTarget(null);
+      fetchEmployees();
+    } catch (err: any) {
+      toast({ title: "Error deleting employee", description: err.message, variant: "destructive" });
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const handleDeleteCancel = () => {
+    setDeleteTarget(null);
+    setDeleteStep(1);
   };
 
   const SortIcon = ({ col }: { col: SortKey }) => {
@@ -230,13 +279,14 @@ export default function EmployeeList() {
                 <TableHead>Phone</TableHead>
                 <TableHead className="cursor-pointer select-none" onClick={() => handleSort("status")}>Status <SortIcon col="status" /></TableHead>
                 <TableHead className="cursor-pointer select-none" onClick={() => handleSort("created_at")}>Joined <SortIcon col="created_at" /></TableHead>
+                <TableHead className="w-12"></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {loading ? (
-                <TableRow><TableCell colSpan={6} className="text-center py-8"><Loader2 className="animate-spin mx-auto" /></TableCell></TableRow>
+                <TableRow><TableCell colSpan={7} className="text-center py-8"><Loader2 className="animate-spin mx-auto" /></TableCell></TableRow>
               ) : paged.length === 0 ? (
-                <TableRow><TableCell colSpan={6} className="text-center py-8 text-muted-foreground">No employees found</TableCell></TableRow>
+                <TableRow><TableCell colSpan={7} className="text-center py-8 text-muted-foreground">No employees found</TableCell></TableRow>
               ) : (
                 paged.map((emp) => (
                   <TableRow key={emp.id}>
@@ -246,6 +296,11 @@ export default function EmployeeList() {
                     <TableCell>{emp.phone || "—"}</TableCell>
                     <TableCell>{statusBadge(emp.status)}</TableCell>
                     <TableCell className="text-muted-foreground">{new Date(emp.created_at).toLocaleDateString()}</TableCell>
+                    <TableCell>
+                      <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10" onClick={() => handleDeleteClick(emp)}>
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </TableCell>
                   </TableRow>
                 ))
               )}
@@ -272,6 +327,43 @@ export default function EmployeeList() {
           )}
         </CardContent>
       </Card>
+
+      {/* Step 1: First confirmation */}
+      <AlertDialog open={!!deleteTarget && deleteStep === 1} onOpenChange={(open) => { if (!open) handleDeleteCancel(); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Employee</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete <strong>{deleteTarget?.name || deleteTarget?.email}</strong>? This will remove their profile, documents, leave requests, and account access.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={handleDeleteCancel}>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDeleteStep1Confirm} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              Yes, Continue
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Step 2: Final confirmation */}
+      <AlertDialog open={!!deleteTarget && deleteStep === 2} onOpenChange={(open) => { if (!open) handleDeleteCancel(); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-destructive">⚠️ Final Confirmation</AlertDialogTitle>
+            <AlertDialogDescription>
+              This action is <strong>permanent and cannot be undone</strong>. All data for <strong>{deleteTarget?.name || deleteTarget?.email}</strong> will be permanently deleted. Are you absolutely sure?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={handleDeleteCancel}>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDeleteFinalConfirm} disabled={deleting} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              {deleting && <Loader2 className="animate-spin mr-2 h-4 w-4" />}
+              Delete Permanently
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
