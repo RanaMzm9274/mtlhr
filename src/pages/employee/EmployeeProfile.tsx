@@ -4,28 +4,51 @@ import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Progress } from "@/components/ui/progress";
 import { Loader2, Save } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
+interface ProfileData {
+  name: string;
+  email: string;
+  phone: string;
+  gender: string;
+  position: string;
+  id_passport: string;
+  license: string;
+}
+
 export default function EmployeeProfile() {
   const { user } = useAuth();
   const { toast } = useToast();
-  const [profile, setProfile] = useState({ name: "", email: "", phone: "", address: "" });
+  const [profile, setProfile] = useState<ProfileData>({
+    name: "", email: "", phone: "", gender: "", position: "", id_passport: "", license: "",
+  });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!user) return;
     supabase.from("employee_profiles").select("*").eq("user_id", user.id).maybeSingle().then(({ data }) => {
-      if (data) setProfile({ name: data.name, email: data.email, phone: data.phone || "", address: data.address || "" });
+      if (data) {
+        setProfile({
+          name: data.name || "",
+          email: data.email || "",
+          phone: (data as any).phone || "",
+          gender: (data as any).gender || "",
+          position: (data as any).position || "",
+          id_passport: (data as any).id_passport || "",
+          license: (data as any).license || "",
+        });
+      }
       setLoading(false);
     });
   }, [user]);
 
-  const completionPercent = [profile.name, profile.email, profile.phone, profile.address].filter(Boolean).length * 25;
+  const requiredFields = [profile.name, profile.email, profile.phone, profile.gender, profile.position, profile.id_passport];
+  const completionPercent = Math.round((requiredFields.filter(Boolean).length / requiredFields.length) * 100);
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -35,9 +58,11 @@ export default function EmployeeProfile() {
       const { error } = await supabase.from("employee_profiles").update({
         name: profile.name,
         phone: profile.phone,
-        address: profile.address,
+        gender: profile.gender,
+        id_passport: profile.id_passport,
+        license: profile.license,
         profile_completed: completionPercent === 100,
-      }).eq("user_id", user.id);
+      } as any).eq("user_id", user.id);
       if (error) throw error;
       toast({ title: "Profile updated" });
     } catch (err: any) {
@@ -79,13 +104,33 @@ export default function EmployeeProfile() {
                 <Input value={profile.email} disabled className="bg-muted" />
               </div>
               <div className="space-y-2">
+                <Label>ID / Passport Number</Label>
+                <Input value={profile.id_passport} onChange={(e) => setProfile({ ...profile, id_passport: e.target.value })} placeholder="Enter ID or passport number" />
+              </div>
+              <div className="space-y-2">
                 <Label>Phone</Label>
                 <Input value={profile.phone} onChange={(e) => setProfile({ ...profile, phone: e.target.value })} placeholder="+44 ..." />
               </div>
-            </div>
-            <div className="space-y-2">
-              <Label>Address</Label>
-              <Textarea value={profile.address} onChange={(e) => setProfile({ ...profile, address: e.target.value })} placeholder="Your full address" />
+              <div className="space-y-2">
+                <Label>Gender</Label>
+                <Select value={profile.gender} onValueChange={(v) => setProfile({ ...profile, gender: v })}>
+                  <SelectTrigger><SelectValue placeholder="Select gender" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="male">Male</SelectItem>
+                    <SelectItem value="female">Female</SelectItem>
+                    <SelectItem value="other">Other</SelectItem>
+                    <SelectItem value="prefer_not_to_say">Prefer not to say</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Position</Label>
+                <Input value={profile.position} disabled className="bg-muted" />
+              </div>
+              <div className="space-y-2 sm:col-span-2">
+                <Label>License / Certification</Label>
+                <Input value={profile.license} onChange={(e) => setProfile({ ...profile, license: e.target.value })} placeholder="e.g. UK Driving License, CSCS Card" />
+              </div>
             </div>
             <Button type="submit" disabled={saving}>
               {saving ? <Loader2 className="animate-spin mr-2" /> : <Save className="mr-2 h-4 w-4" />} Save Changes

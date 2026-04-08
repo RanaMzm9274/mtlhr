@@ -1,10 +1,10 @@
 import { useEffect, useState, useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Dialog,
   DialogContent,
@@ -20,7 +20,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { UserPlus, Search, Loader2, ArrowUp, ArrowDown, ChevronLeft, ChevronRight } from "lucide-react";
+import { UserPlus, Search, Loader2, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, Copy, CheckCircle2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 interface Employee {
@@ -30,11 +30,12 @@ interface Employee {
   email: string;
   phone: string | null;
   status: string;
+  position: string | null;
   profile_completed: boolean | null;
   created_at: string;
 }
 
-type SortKey = "name" | "email" | "status" | "created_at";
+type SortKey = "name" | "email" | "status" | "created_at" | "position";
 type SortDir = "asc" | "desc";
 const PAGE_SIZE = 10;
 
@@ -47,11 +48,14 @@ export default function EmployeeList() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteName, setInviteName] = useState("");
+  const [invitePosition, setInvitePosition] = useState("");
   const [inviting, setInviting] = useState(false);
+  const [inviteLink, setInviteLink] = useState("");
   const [filter, setFilter] = useState<"all" | "active" | "inactive" | "invited">("all");
   const [sortKey, setSortKey] = useState<SortKey>("created_at");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [page, setPage] = useState(1);
+  const [copied, setCopied] = useState(false);
 
   const fetchEmployees = async () => {
     const [{ data: profiles }, { data: roles }] = await Promise.all([
@@ -71,37 +75,45 @@ export default function EmployeeList() {
     setInviting(true);
     try {
       const token = crypto.randomUUID();
-      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
 
       const { error: invError } = await supabase.from("invitations").insert({
         email: inviteEmail,
         token,
         expires_at: expiresAt,
-      });
+        name: inviteName,
+        position: invitePosition,
+      } as any);
       if (invError) throw invError;
 
-      const tempPassword = crypto.randomUUID();
-      const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
-        email: inviteEmail,
-        password: tempPassword,
-        options: { data: { name: inviteName } },
-      });
-      if (signUpError) throw signUpError;
+      // Generate invitation link
+      const link = `${window.location.origin}/set-password?token=${token}`;
+      setInviteLink(link);
 
-      if (signUpData.user) {
-        await supabase.from("user_roles").insert({ user_id: signUpData.user.id, role: "employee" as any });
-        await supabase.from("employee_profiles").update({ name: inviteName, status: "invited" }).eq("user_id", signUpData.user.id);
-      }
-
-      toast({ title: "Employee invited", description: `Invitation sent to ${inviteEmail}` });
-      setDialogOpen(false);
-      setInviteEmail("");
-      setInviteName("");
+      toast({ title: "Invitation created", description: "Share the link below with the employee." });
       fetchEmployees();
     } catch (err: any) {
       toast({ title: "Error", description: err.message, variant: "destructive" });
     } finally {
       setInviting(false);
+    }
+  };
+
+  const handleCopyLink = async () => {
+    await navigator.clipboard.writeText(inviteLink);
+    setCopied(true);
+    toast({ title: "Link copied to clipboard" });
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleCloseDialog = (open: boolean) => {
+    setDialogOpen(open);
+    if (!open) {
+      setInviteEmail("");
+      setInviteName("");
+      setInvitePosition("");
+      setInviteLink("");
+      setCopied(false);
     }
   };
 
@@ -120,21 +132,16 @@ export default function EmployeeList() {
     return sortDir === "asc" ? <ArrowUp className="h-3 w-3 ml-1 inline" /> : <ArrowDown className="h-3 w-3 ml-1 inline" />;
   };
 
-  // Filter out admins, then apply search + status filter + sort + pagination
   const processed = useMemo(() => {
     let list = employees.filter((e) => !adminUserIds.has(e.user_id));
-    
-    // Search
     if (search) {
       const s = search.toLowerCase();
       list = list.filter((e) => e.name.toLowerCase().includes(s) || e.email.toLowerCase().includes(s));
     }
-    // Status filter
     if (filter !== "all") list = list.filter((e) => e.status === filter);
-    // Sort
     list = [...list].sort((a, b) => {
-      const aVal = (a[sortKey] ?? "").toString().toLowerCase();
-      const bVal = (b[sortKey] ?? "").toString().toLowerCase();
+      const aVal = ((a as any)[sortKey] ?? "").toString().toLowerCase();
+      const bVal = ((b as any)[sortKey] ?? "").toString().toLowerCase();
       return sortDir === "asc" ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
     });
     return list;
@@ -156,25 +163,45 @@ export default function EmployeeList() {
           <h1 className="text-2xl font-bold">Employees</h1>
           <p className="text-muted-foreground">{nonAdminCount} total employees</p>
         </div>
-        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <Dialog open={dialogOpen} onOpenChange={handleCloseDialog}>
           <DialogTrigger asChild>
             <Button><UserPlus className="mr-2 h-4 w-4" /> Add Employee</Button>
           </DialogTrigger>
           <DialogContent>
             <DialogHeader><DialogTitle>Invite New Employee</DialogTitle></DialogHeader>
-            <form onSubmit={handleInvite} className="space-y-4">
-              <div className="space-y-2">
-                <Label>Full Name</Label>
-                <Input value={inviteName} onChange={(e) => setInviteName(e.target.value)} required placeholder="John Doe" />
+            {!inviteLink ? (
+              <form onSubmit={handleInvite} className="space-y-4">
+                <div className="space-y-2">
+                  <Label>Full Name</Label>
+                  <Input value={inviteName} onChange={(e) => setInviteName(e.target.value)} required placeholder="John Doe" />
+                </div>
+                <div className="space-y-2">
+                  <Label>Email</Label>
+                  <Input type="email" value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} required placeholder="john@microtech.com" />
+                </div>
+                <div className="space-y-2">
+                  <Label>Position</Label>
+                  <Input value={invitePosition} onChange={(e) => setInvitePosition(e.target.value)} required placeholder="Software Engineer" />
+                </div>
+                <Button type="submit" className="w-full" disabled={inviting}>
+                  {inviting && <Loader2 className="animate-spin mr-2" />} Generate Invitation Link
+                </Button>
+              </form>
+            ) : (
+              <div className="space-y-4">
+                <div className="rounded-lg bg-muted p-4 space-y-2">
+                  <p className="text-sm font-medium">Invitation link generated!</p>
+                  <p className="text-xs text-muted-foreground">Share this link with <strong>{inviteName}</strong> ({inviteEmail}). It expires in 7 days.</p>
+                  <div className="flex gap-2 mt-2">
+                    <Input value={inviteLink} readOnly className="text-xs" />
+                    <Button variant="outline" size="sm" onClick={handleCopyLink}>
+                      {copied ? <CheckCircle2 className="h-4 w-4 text-green-600" /> : <Copy className="h-4 w-4" />}
+                    </Button>
+                  </div>
+                </div>
+                <Button variant="outline" className="w-full" onClick={() => handleCloseDialog(false)}>Done</Button>
               </div>
-              <div className="space-y-2">
-                <Label>Email</Label>
-                <Input type="email" value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} required placeholder="john@microtech.com" />
-              </div>
-              <Button type="submit" className="w-full" disabled={inviting}>
-                {inviting && <Loader2 className="animate-spin mr-2" />} Send Invitation
-              </Button>
-            </form>
+            )}
           </DialogContent>
         </Dialog>
       </div>
@@ -199,6 +226,7 @@ export default function EmployeeList() {
               <TableRow>
                 <TableHead className="cursor-pointer select-none" onClick={() => handleSort("name")}>Name <SortIcon col="name" /></TableHead>
                 <TableHead className="cursor-pointer select-none" onClick={() => handleSort("email")}>Email <SortIcon col="email" /></TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => handleSort("position")}>Position <SortIcon col="position" /></TableHead>
                 <TableHead>Phone</TableHead>
                 <TableHead className="cursor-pointer select-none" onClick={() => handleSort("status")}>Status <SortIcon col="status" /></TableHead>
                 <TableHead className="cursor-pointer select-none" onClick={() => handleSort("created_at")}>Joined <SortIcon col="created_at" /></TableHead>
@@ -206,14 +234,15 @@ export default function EmployeeList() {
             </TableHeader>
             <TableBody>
               {loading ? (
-                <TableRow><TableCell colSpan={5} className="text-center py-8"><Loader2 className="animate-spin mx-auto" /></TableCell></TableRow>
+                <TableRow><TableCell colSpan={6} className="text-center py-8"><Loader2 className="animate-spin mx-auto" /></TableCell></TableRow>
               ) : paged.length === 0 ? (
-                <TableRow><TableCell colSpan={5} className="text-center py-8 text-muted-foreground">No employees found</TableCell></TableRow>
+                <TableRow><TableCell colSpan={6} className="text-center py-8 text-muted-foreground">No employees found</TableCell></TableRow>
               ) : (
                 paged.map((emp) => (
                   <TableRow key={emp.id}>
                     <TableCell className="font-medium">{emp.name || "—"}</TableCell>
                     <TableCell>{emp.email}</TableCell>
+                    <TableCell>{(emp as any).position || "—"}</TableCell>
                     <TableCell>{emp.phone || "—"}</TableCell>
                     <TableCell>{statusBadge(emp.status)}</TableCell>
                     <TableCell className="text-muted-foreground">{new Date(emp.created_at).toLocaleDateString()}</TableCell>
@@ -223,7 +252,6 @@ export default function EmployeeList() {
             </TableBody>
           </Table>
 
-          {/* Pagination */}
           {totalPages > 1 && (
             <div className="flex items-center justify-between mt-4 pt-4 border-t">
               <p className="text-sm text-muted-foreground">
