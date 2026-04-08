@@ -195,7 +195,7 @@ export default function EmployeeList() {
                   <div className="flex gap-2 mt-2">
                     <Input value={inviteLink} readOnly className="text-xs" />
                     <Button variant="outline" size="sm" onClick={handleCopyLink}>
-                      {copied ? <CheckCircle2 className="h-4 w-4 text-green-600" /> : <Copy className="h-4 w-4" />}
+                      {copied ? <CheckCircle2 className="h-4 w-4 text-success" /> : <Copy className="h-4 w-4" />}
                     </Button>
                   </div>
                 </div>
