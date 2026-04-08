@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -15,7 +15,25 @@ export default function SetPassword() {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [loading, setLoading] = useState(false);
+  const [validating, setValidating] = useState(true);
+  const [invitation, setInvitation] = useState<any>(null);
   const token = searchParams.get("token");
+
+  useEffect(() => {
+    if (!token) { setValidating(false); return; }
+    supabase
+      .from("invitations")
+      .select("*")
+      .eq("token", token)
+      .eq("used", false)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (data && new Date(data.expires_at) > new Date()) {
+          setInvitation(data);
+        }
+        setValidating(false);
+      });
+  }, [token]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -30,24 +48,11 @@ export default function SetPassword() {
 
     setLoading(true);
     try {
-      // Verify invitation token
-      const { data: invitation } = await supabase
-        .from("invitations")
-        .select("*")
-        .eq("token", token ?? "")
-        .eq("used", false)
-        .maybeSingle();
-
-      if (!invitation || new Date(invitation.expires_at) < new Date()) {
-        toast({ title: "Invalid or expired invitation", variant: "destructive" });
-        return;
-      }
-
       // Sign up the user
       const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
         email: invitation.email,
         password,
-        options: { data: { name: invitation.email.split("@")[0] } },
+        options: { data: { name: (invitation as any).name || invitation.email.split("@")[0] } },
       });
 
       if (signUpError) throw signUpError;
@@ -55,11 +60,16 @@ export default function SetPassword() {
       // Mark invitation as used
       await supabase.from("invitations").update({ used: true }).eq("id", invitation.id);
 
-      // Activate employee profile
+      // Set up employee profile and role
       if (signUpData.user) {
+        await supabase.from("user_roles").insert({ user_id: signUpData.user.id, role: "employee" as any });
         await supabase
           .from("employee_profiles")
-          .update({ status: "active" })
+          .update({
+            name: (invitation as any).name || "",
+            position: (invitation as any).position || "",
+            status: "active",
+          } as any)
           .eq("user_id", signUpData.user.id);
       }
 
@@ -72,12 +82,21 @@ export default function SetPassword() {
     }
   };
 
-  if (!token) {
+  if (validating) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background p-4">
+        <Loader2 className="animate-spin h-8 w-8 text-primary" />
+      </div>
+    );
+  }
+
+  if (!token || !invitation) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background p-4">
         <Card className="w-full max-w-md">
           <CardContent className="pt-6 text-center">
-            <p className="text-muted-foreground">Invalid invitation link.</p>
+            <p className="text-muted-foreground">Invalid or expired invitation link.</p>
+            <Button variant="link" onClick={() => navigate("/login")} className="mt-4">Go to Login</Button>
           </CardContent>
         </Card>
       </div>
@@ -93,7 +112,11 @@ export default function SetPassword() {
           </div>
           <div>
             <CardTitle className="text-2xl font-bold">Set Your Password</CardTitle>
-            <CardDescription>Welcome to Microtech London HR Portal</CardDescription>
+            <CardDescription>
+              Welcome to Microtech London HR Portal
+              {(invitation as any).name && <span className="block mt-1 font-medium text-foreground">{(invitation as any).name}</span>}
+              <span className="block text-xs mt-1">{invitation.email}</span>
+            </CardDescription>
           </div>
         </CardHeader>
         <CardContent>

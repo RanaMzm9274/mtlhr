@@ -49,9 +49,13 @@ export type Database = {
           address: string | null
           created_at: string
           email: string
+          gender: string | null
           id: string
+          id_passport: string | null
+          license: string | null
           name: string
           phone: string | null
+          position: string | null
           profile_completed: boolean | null
           status: string
           updated_at: string
@@ -61,9 +65,13 @@ export type Database = {
           address?: string | null
           created_at?: string
           email?: string
+          gender?: string | null
           id?: string
+          id_passport?: string | null
+          license?: string | null
           name?: string
           phone?: string | null
+          position?: string | null
           profile_completed?: boolean | null
           status?: string
           updated_at?: string
@@ -73,9 +81,13 @@ export type Database = {
           address?: string | null
           created_at?: string
           email?: string
+          gender?: string | null
           id?: string
+          id_passport?: string | null
+          license?: string | null
           name?: string
           phone?: string | null
+          position?: string | null
           profile_completed?: boolean | null
           status?: string
           updated_at?: string
@@ -89,6 +101,8 @@ export type Database = {
           email: string
           expires_at: string
           id: string
+          name: string | null
+          position: string | null
           token: string
           used: boolean | null
         }
@@ -97,6 +111,8 @@ export type Database = {
           email: string
           expires_at: string
           id?: string
+          name?: string | null
+          position?: string | null
           token: string
           used?: boolean | null
         }
@@ -105,6 +121,8 @@ export type Database = {
           email?: string
           expires_at?: string
           id?: string
+          name?: string | null
+          position?: string | null
           token?: string
           used?: boolean | null
         }
