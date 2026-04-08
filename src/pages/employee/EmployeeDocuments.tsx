@@ -14,6 +14,8 @@ import {
 } from "@/components/ui/table";
 import { Upload, Trash2, Download, Loader2, FileText } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { buildDocumentInsertPayload, normalizeDocumentRecord } from "@/lib/hrPortal";
+import { SUPABASE_REQUEST_TIMEOUT_MS, withTimeout, withTimeoutFallback } from "@/lib/async";
 
 interface Document {
   id: string;
@@ -34,10 +36,23 @@ export default function EmployeeDocuments() {
   const [category, setCategory] = useState("id_proof");
 
   const fetchDocs = async () => {
-    if (!user) return;
-    const { data } = await supabase.from("documents").select("*").eq("user_id", user.id).order("uploaded_at", { ascending: false });
-    setDocuments(data ?? []);
-    setLoading(false);
+    if (!user) {
+      setLoading(false);
+      return;
+    }
+    try {
+      const { data, error } = await withTimeoutFallback(
+        supabase.from("documents").select("*").eq("user_id", user.id).order("uploaded_at", { ascending: false }),
+        { data: [], error: null } as any,
+        SUPABASE_REQUEST_TIMEOUT_MS,
+      );
+      if (error) console.error("Failed to fetch documents:", error);
+      setDocuments(((data as any[]) ?? []).map((doc) => normalizeDocumentRecord(doc)));
+    } catch (err) {
+      console.error("Error fetching documents:", err);
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => { fetchDocs(); }, [user]);
@@ -60,16 +75,19 @@ export default function EmployeeDocuments() {
     try {
       const ext = file.name.split(".").pop();
       const path = `${user.id}/${crypto.randomUUID()}.${ext}`;
-      const { error: uploadError } = await supabase.storage.from("documents").upload(path, file);
+      const { error: uploadError } = await withTimeout(
+        supabase.storage.from("documents").upload(path, file),
+        SUPABASE_REQUEST_TIMEOUT_MS,
+        "Document upload",
+      );
       if (uploadError) throw uploadError;
 
-      const { error: dbError } = await supabase.from("documents").insert({
-        user_id: user.id,
-        file_url: path,
-        file_name: file.name,
-        file_type: ext || "",
-        category,
-      });
+      const payload = buildDocumentInsertPayload(user.id, path, file, category);
+      const { error: dbError } = await withTimeout(
+        supabase.from("documents").insert(payload as any),
+        SUPABASE_REQUEST_TIMEOUT_MS,
+        "Document save",
+      );
       if (dbError) throw dbError;
 
       toast({ title: "Document uploaded" });
@@ -83,14 +101,36 @@ export default function EmployeeDocuments() {
   };
 
   const handleDelete = async (doc: Document) => {
-    await supabase.storage.from("documents").remove([doc.file_url]);
-    await supabase.from("documents").delete().eq("id", doc.id);
+    if (!doc.file_url) {
+      toast({ title: "File path missing", description: "This document record has no storage path.", variant: "destructive" });
+      return;
+    }
+
+    await withTimeout(
+      supabase.storage.from("documents").remove([doc.file_url]),
+      SUPABASE_REQUEST_TIMEOUT_MS,
+      "Document delete",
+    );
+    await withTimeout(
+      supabase.from("documents").delete().eq("id", doc.id),
+      SUPABASE_REQUEST_TIMEOUT_MS,
+      "Document record delete",
+    );
     toast({ title: "Document deleted" });
     fetchDocs();
   };
 
   const handleDownload = async (doc: Document) => {
-    const { data } = await supabase.storage.from("documents").createSignedUrl(doc.file_url, 60);
+    if (!doc.file_url) {
+      toast({ title: "Download unavailable", description: "This document record has no storage path.", variant: "destructive" });
+      return;
+    }
+
+    const { data } = await withTimeout(
+      supabase.storage.from("documents").createSignedUrl(doc.file_url, 60),
+      SUPABASE_REQUEST_TIMEOUT_MS,
+      "Document download link",
+    );
     if (data?.signedUrl) window.open(data.signedUrl, "_blank");
   };
 

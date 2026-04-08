@@ -3,6 +3,8 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CalendarDays, FileText, User, CheckCircle2 } from "lucide-react";
+import { normalizeProfileRecord } from "@/lib/hrPortal";
+import { SUPABASE_REQUEST_TIMEOUT_MS, withTimeoutFallback } from "@/lib/async";
 
 export default function EmployeeDashboard() {
   const { user } = useAuth();
@@ -12,15 +14,35 @@ export default function EmployeeDashboard() {
   useEffect(() => {
     if (!user) return;
     const fetch = async () => {
-      const { data: prof } = await supabase.from("employee_profiles").select("*").eq("user_id", user.id).maybeSingle();
-      const { data: docs } = await supabase.from("documents").select("id").eq("user_id", user.id);
-      const { data: leaves } = await supabase.from("leave_requests").select("status").eq("user_id", user.id);
-      setProfile(prof);
-      setStats({
-        docs: docs?.length ?? 0,
-        pendingLeaves: leaves?.filter((l) => l.status === "pending").length ?? 0,
-        approvedLeaves: leaves?.filter((l) => l.status === "approved").length ?? 0,
-      });
+      try {
+        const [{ data: prof, error: profileError }, { data: docs, error: docsError }, { data: leaves, error: leavesError }] = await withTimeoutFallback(
+          Promise.all([
+            supabase.from("employee_profiles").select("*").eq("user_id", user.id).order("created_at", { ascending: false }).limit(1),
+            supabase.from("documents").select("id").eq("user_id", user.id),
+            supabase.from("leave_requests").select("status").eq("user_id", user.id),
+          ]),
+          [
+            { data: [], error: null },
+            { data: [], error: null },
+            { data: [], error: null },
+          ] as any,
+          SUPABASE_REQUEST_TIMEOUT_MS,
+        );
+
+        if (profileError) throw profileError;
+        if (docsError) throw docsError;
+        if (leavesError) throw leavesError;
+
+        const normalizedProfile = normalizeProfileRecord((prof as any[])?.[0], user);
+        setProfile(normalizedProfile);
+        setStats({
+          docs: docs?.length ?? 0,
+          pendingLeaves: leaves?.filter((l) => l.status === "pending").length ?? 0,
+          approvedLeaves: leaves?.filter((l) => l.status === "approved").length ?? 0,
+        });
+      } catch (err) {
+        console.error("Failed to fetch employee dashboard:", err);
+      }
     };
     fetch();
   }, [user]);

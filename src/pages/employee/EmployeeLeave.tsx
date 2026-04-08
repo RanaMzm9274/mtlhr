@@ -24,6 +24,8 @@ import {
 } from "@/components/ui/table";
 import { Plus, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { buildLeaveInsertPayload, normalizeLeaveRecord } from "@/lib/hrPortal";
+import { SUPABASE_REQUEST_TIMEOUT_MS, withTimeout, withTimeoutFallback } from "@/lib/async";
 
 interface LeaveRequest {
   id: string;
@@ -51,10 +53,23 @@ export default function EmployeeLeave() {
   });
 
   const fetchLeaves = async () => {
-    if (!user) return;
-    const { data } = await supabase.from("leave_requests").select("*").eq("user_id", user.id).order("created_at", { ascending: false });
-    setLeaves(data ?? []);
-    setLoading(false);
+    if (!user) {
+      setLoading(false);
+      return;
+    }
+    try {
+      const { data, error } = await withTimeoutFallback(
+        supabase.from("leave_requests").select("*").eq("user_id", user.id).order("created_at", { ascending: false }),
+        { data: [], error: null } as any,
+        SUPABASE_REQUEST_TIMEOUT_MS,
+      );
+      if (error) throw error;
+      setLeaves(((data as any[]) ?? []).map((leave) => normalizeLeaveRecord(leave)));
+    } catch (err) {
+      console.error("Failed to fetch leave requests:", err);
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => { fetchLeaves(); }, [user]);
@@ -62,15 +77,19 @@ export default function EmployeeLeave() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user) return;
+    if (form.end_date < form.start_date) {
+      toast({ title: "Invalid dates", description: "End date cannot be earlier than start date.", variant: "destructive" });
+      return;
+    }
+
     setSubmitting(true);
     try {
-      const { error } = await supabase.from("leave_requests").insert({
-        user_id: user.id,
-        leave_type: form.leave_type,
-        start_date: form.start_date,
-        end_date: form.end_date,
-        reason: form.reason,
-      });
+      const payload = buildLeaveInsertPayload(user.id, form);
+      const { error } = await withTimeout(
+        supabase.from("leave_requests").insert(payload as any),
+        SUPABASE_REQUEST_TIMEOUT_MS,
+        "Leave submission",
+      );
       if (error) throw error;
       toast({ title: "Leave request submitted" });
       setDialogOpen(false);

@@ -29,8 +29,12 @@ Deno.serve(async (req) => {
     }
 
     const adminClient = createClient(supabaseUrl, serviceRoleKey)
-    const { data: roleData } = await adminClient.from('user_roles').select('role').eq('user_id', caller.id).eq('role', 'admin').maybeSingle()
-    if (!roleData) {
+    const { data: roleRows, error: roleError } = await adminClient.from('user_roles').select('role').eq('user_id', caller.id)
+    if (roleError) {
+      return new Response(JSON.stringify({ error: roleError.message }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+    }
+
+    if (!(roleRows ?? []).some((role) => role.role === 'admin')) {
       return new Response(JSON.stringify({ error: 'Forbidden' }), { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
     }
 

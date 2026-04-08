@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Loader2, Save, Lock } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { SUPABASE_REQUEST_TIMEOUT_MS, withTimeout } from "@/lib/async";
 
 export default function SettingsPage() {
   const { user } = useAuth();
@@ -30,7 +31,11 @@ export default function SettingsPage() {
 
     setChangingPassword(true);
     try {
-      const { error } = await supabase.auth.updateUser({ password: newPassword });
+      const { error } = await withTimeout(
+        supabase.auth.updateUser({ password: newPassword }),
+        SUPABASE_REQUEST_TIMEOUT_MS,
+        "Password update",
+      );
       if (error) throw error;
       toast({ title: "Password updated successfully" });
       setCurrentPassword("");

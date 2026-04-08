@@ -1,22 +1,43 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { useAuth } from "@/contexts/AuthContext";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Users, UserCheck, UserX, CalendarClock } from "lucide-react";
+import { filterEmployeeProfiles, normalizeProfileRecord } from "@/lib/hrPortal";
+import { SUPABASE_REQUEST_TIMEOUT_MS, withTimeoutFallback } from "@/lib/async";
 
 export default function AdminDashboard() {
-  const { user } = useAuth();
   const [stats, setStats] = useState({ total: 0, active: 0, inactive: 0, pendingLeaves: 0 });
 
   useEffect(() => {
     const fetchStats = async () => {
-      const { data: profiles } = await supabase.from("employee_profiles").select("status");
-      const { data: leaves } = await supabase.from("leave_requests").select("status").eq("status", "pending");
+      try {
+        const [{ data: profiles, error: profilesError }, { data: leaves, error: leavesError }, { data: roleRows, error: rolesError }] = await withTimeoutFallback(
+          Promise.all([
+            supabase.from("employee_profiles").select("*"),
+            supabase.from("leave_requests").select("status").eq("status", "pending"),
+            supabase.from("user_roles").select("user_id, role"),
+          ]),
+          [
+            { data: [], error: null },
+            { data: [], error: null },
+            { data: [], error: null },
+          ] as any,
+          SUPABASE_REQUEST_TIMEOUT_MS,
+        );
 
-      const total = profiles?.length ?? 0;
-      const active = profiles?.filter((p) => p.status === "active").length ?? 0;
-      const inactive = profiles?.filter((p) => p.status === "inactive").length ?? 0;
-      setStats({ total, active, inactive, pendingLeaves: leaves?.length ?? 0 });
+        if (profilesError) throw profilesError;
+        if (leavesError) throw leavesError;
+        if (rolesError) throw rolesError;
+
+        const normalizedProfiles = ((profiles as any[]) ?? []).map((profile) => normalizeProfileRecord(profile));
+        const employeeProfiles = filterEmployeeProfiles(normalizedProfiles, roleRows ?? []);
+        const total = employeeProfiles.length;
+        const active = employeeProfiles.filter((profile) => profile.status === "active").length;
+        const inactive = employeeProfiles.filter((profile) => profile.status === "inactive").length;
+        setStats({ total, active, inactive, pendingLeaves: leaves?.length ?? 0 });
+      } catch (err) {
+        console.error("Failed to fetch admin dashboard:", err);
+      }
     };
     fetchStats();
   }, []);

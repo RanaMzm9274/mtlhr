@@ -8,6 +8,9 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Loader2, Save } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { removeUndefined } from "@/lib/utils";
+import { buildProfileUpsertPayload, normalizeProfileRecord, saveProfileRecord } from "@/lib/hrPortal";
+import { SUPABASE_REQUEST_TIMEOUT_MS, withTimeoutFallback } from "@/lib/async";
 
 export default function AdminProfile() {
   const { user } = useAuth();
@@ -19,21 +22,39 @@ export default function AdminProfile() {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (!user) return;
-    supabase.from("employee_profiles").select("*").eq("user_id", user.id).maybeSingle().then(({ data }) => {
-      if (data) {
-        setProfile({
-          name: data.name || "",
-          email: data.email || "",
-          phone: (data as any).phone || "",
-          gender: (data as any).gender || "",
-          position: (data as any).position || "",
-          id_passport: (data as any).id_passport || "",
-          license: (data as any).license || "",
-        });
-      }
+    if (!user) {
       setLoading(false);
-    });
+      return;
+    }
+    (async () => {
+      try {
+        const { data, error } = await withTimeoutFallback(
+          supabase
+            .from("employee_profiles")
+            .select("*")
+            .eq("user_id", user.id)
+            .order("created_at", { ascending: false })
+            .limit(1),
+          { data: [], error: null } as any,
+          SUPABASE_REQUEST_TIMEOUT_MS,
+        );
+        if (error) console.error("Failed to fetch admin profile:", error);
+        const normalized = normalizeProfileRecord((data as any[])?.[0], user);
+        setProfile({
+          name: normalized.name,
+          email: normalized.email,
+          phone: normalized.phone,
+          gender: normalized.gender,
+          position: normalized.position,
+          id_passport: normalized.id_passport,
+          license: normalized.license,
+        });
+      } catch (err) {
+        console.error("Error fetching admin profile:", err);
+      } finally {
+        setLoading(false);
+      }
+    })();
   }, [user]);
 
   const handleSave = async (e: React.FormEvent) => {
@@ -41,15 +62,30 @@ export default function AdminProfile() {
     if (!user) return;
     setSaving(true);
     try {
-      const { error } = await supabase.from("employee_profiles").update({
-        name: profile.name,
-        phone: profile.phone,
-        gender: profile.gender,
-        position: profile.position,
-        id_passport: profile.id_passport,
-        license: profile.license,
-      } as any).eq("user_id", user.id);
-      if (error) throw error;
+      const payload = removeUndefined({
+        ...buildProfileUpsertPayload(user, {
+          name: profile.name,
+          email: profile.email,
+          phone: profile.phone,
+          gender: profile.gender,
+          position: profile.position,
+          id_passport: profile.id_passport,
+          license: profile.license,
+          profile_completed: false,
+        }),
+        status: "active",
+      } as any);
+      const savedRow = await saveProfileRecord(supabase, payload as any);
+      const normalized = normalizeProfileRecord(savedRow as any, user);
+      setProfile({
+        name: normalized.name,
+        email: normalized.email,
+        phone: normalized.phone,
+        gender: normalized.gender,
+        position: normalized.position,
+        id_passport: normalized.id_passport,
+        license: normalized.license,
+      });
       toast({ title: "Profile updated" });
     } catch (err: any) {
       toast({ title: "Error", description: err.message, variant: "destructive" });

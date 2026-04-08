@@ -4,8 +4,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Building2, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { AppLogo } from "@/components/AppLogo";
 
 export default function Login() {
   const { signIn } = useAuth();
@@ -30,12 +31,10 @@ export default function Login() {
     <div className="min-h-screen flex items-center justify-center bg-background p-4">
       <Card className="w-full max-w-md animate-fade-in">
         <CardHeader className="text-center space-y-4">
-          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-xl bg-primary">
-            <Building2 className="h-7 w-7 text-primary-foreground" />
-          </div>
+          <AppLogo className="items-center" imageClassName="max-w-[280px]" />
           <div>
-            <CardTitle className="text-2xl font-bold">Microtech London</CardTitle>
-            <CardDescription className="mt-1">HR Management Portal</CardDescription>
+            <CardTitle className="text-2xl font-bold">HR Portal</CardTitle>
+            <CardDescription className="mt-1">Sign in to Micro Tech London Ltd</CardDescription>
           </div>
         </CardHeader>
         <CardContent>

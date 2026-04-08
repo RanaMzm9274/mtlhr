@@ -1,12 +1,35 @@
-import { useState, useEffect } from "react";
-import { useSearchParams, useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { User } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Building2, Loader2 } from "lucide-react";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { buildProfileUpsertPayload, normalizeProfileRecord, saveProfileRecord } from "@/lib/hrPortal";
+import { AppLogo } from "@/components/AppLogo";
+import { SUPABASE_REQUEST_TIMEOUT_MS, withTimeout } from "@/lib/async";
+
+type InvitationMode = "auth-invite" | "legacy-token";
+
+interface InvitationState {
+  email: string;
+  name: string;
+  position: string;
+  mode: InvitationMode;
+}
+
+const buildInvitationFromUser = (user: User): InvitationState => {
+  const normalized = normalizeProfileRecord({ position: user.user_metadata?.position }, user);
+  return {
+    email: normalized.email,
+    name: normalized.name || normalized.email.split("@")[0],
+    position: normalized.position,
+    mode: "auth-invite",
+  };
+};
 
 export default function SetPassword() {
   const [searchParams] = useSearchParams();
@@ -16,29 +39,82 @@ export default function SetPassword() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [validating, setValidating] = useState(true);
-  const [invitation, setInvitation] = useState<{ email: string; name: string; position: string } | null>(null);
+  const [invitation, setInvitation] = useState<InvitationState | null>(null);
   const token = searchParams.get("token");
 
   useEffect(() => {
-    if (!token) { setValidating(false); return; }
+    let mounted = true;
 
-    supabase.functions.invoke("validate-invitation", {
-      body: { token },
-    }).then(({ data, error }) => {
-      if (!error && data?.valid) {
-        setInvitation({ email: data.email, name: data.name, position: data.position });
-      }
+    const setInvitationFromSession = (user: User | null) => {
+      if (!mounted || !user) return false;
+      setInvitation(buildInvitationFromUser(user));
       setValidating(false);
+      return true;
+    };
+
+    const validateInvite = async () => {
+      if (token) {
+        const { data, error } = await withTimeout(
+          supabase.functions.invoke("validate-invitation", {
+            body: { token },
+          }),
+          SUPABASE_REQUEST_TIMEOUT_MS,
+          "Invitation validation",
+        );
+
+        if (!error && data?.valid && mounted) {
+          setInvitation({
+            email: data.email,
+            name: data.name,
+            position: data.position,
+            mode: "legacy-token",
+          });
+        }
+
+        if (mounted) setValidating(false);
+        return;
+      }
+
+      const { data: { session } } = await withTimeout(
+        supabase.auth.getSession(),
+        SUPABASE_REQUEST_TIMEOUT_MS,
+        "Invitation session lookup",
+      );
+      if (setInvitationFromSession(session?.user ?? null)) return;
+
+      const { data: { user } } = await withTimeout(
+        supabase.auth.getUser(),
+        SUPABASE_REQUEST_TIMEOUT_MS,
+        "Invitation user lookup",
+      );
+      if (setInvitationFromSession(user ?? null)) return;
+
+      if (mounted) setValidating(false);
+    };
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!token && session?.user) {
+        setInvitationFromSession(session.user);
+      }
     });
+
+    validateInvite();
+
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
   }, [token]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!invitation) return;
+
     if (password !== confirmPassword) {
       toast({ title: "Passwords don't match", variant: "destructive" });
       return;
     }
+
     if (password.length < 8) {
       toast({ title: "Password must be at least 8 characters", variant: "destructive" });
       return;
@@ -46,30 +122,93 @@ export default function SetPassword() {
 
     setLoading(true);
     try {
-      const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
-        email: invitation.email,
-        password,
-        options: { data: { name: invitation.name || invitation.email.split("@")[0] } },
-      });
+      if (invitation.mode === "auth-invite") {
+        const { data: { user } } = await withTimeout(
+          supabase.auth.getUser(),
+          SUPABASE_REQUEST_TIMEOUT_MS,
+          "Invitation user lookup",
+        );
+        if (!user) {
+          throw new Error("Invitation session not found. Open the latest invitation email again.");
+        }
 
-      if (signUpError) throw signUpError;
+        const { error: updateUserError } = await withTimeout(
+          supabase.auth.updateUser({
+            password,
+            data: {
+              name: invitation.name || invitation.email.split("@")[0],
+              position: invitation.position || "",
+            },
+          }),
+          SUPABASE_REQUEST_TIMEOUT_MS,
+          "Account activation",
+        );
+        if (updateUserError) throw updateUserError;
 
-      // Mark invitation as used via secure edge function
-      await supabase.functions.invoke("use-invitation", { body: { token } });
-
-      if (signUpData.user) {
-        await supabase.from("user_roles").insert({ user_id: signUpData.user.id, role: "employee" as any });
-        await supabase
-          .from("employee_profiles")
-          .update({
-            name: invitation.name || "",
+        await saveProfileRecord(supabase, {
+          ...buildProfileUpsertPayload(user, {
+            name: invitation.name || invitation.email.split("@")[0],
+            email: user.email ?? invitation.email,
+            phone: "",
+            gender: "",
             position: invitation.position || "",
-            status: "active",
-          } as any)
-          .eq("user_id", signUpData.user.id);
+            id_passport: "",
+            license: "",
+            profile_completed: false,
+          }),
+          status: "active",
+        } as any);
+
+        toast({ title: "Account activated" });
+        navigate("/employee/dashboard");
+        return;
       }
 
-      toast({ title: "Account created! You can now sign in." });
+      const { data: signUpData, error: signUpError } = await withTimeout(
+        supabase.auth.signUp({
+          email: invitation.email,
+          password,
+          options: {
+            data: {
+              name: invitation.name || invitation.email.split("@")[0],
+              position: invitation.position || "",
+            },
+          },
+        }),
+        SUPABASE_REQUEST_TIMEOUT_MS,
+        "Account creation",
+      );
+      if (signUpError) throw signUpError;
+
+      const newUser = signUpData.user;
+      if (!newUser) {
+        throw new Error("User account could not be created.");
+      }
+
+      const { error: useInvitationError } = await withTimeout(
+        supabase.functions.invoke("use-invitation", {
+          body: { token },
+        }),
+        SUPABASE_REQUEST_TIMEOUT_MS,
+        "Invitation consumption",
+      );
+      if (useInvitationError) throw useInvitationError;
+
+      await saveProfileRecord(supabase, {
+        ...buildProfileUpsertPayload(newUser, {
+          name: invitation.name || invitation.email.split("@")[0],
+          email: invitation.email,
+          phone: "",
+          gender: "",
+          position: invitation.position || "",
+          id_passport: "",
+          license: "",
+          profile_completed: false,
+        }),
+        status: "active",
+      } as any);
+
+      toast({ title: "Account created", description: "You can now sign in." });
       navigate("/login");
     } catch (err: any) {
       toast({ title: "Error", description: err.message, variant: "destructive" });
@@ -86,7 +225,7 @@ export default function SetPassword() {
     );
   }
 
-  if (!token || !invitation) {
+  if (!invitation) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background p-4">
         <Card className="w-full max-w-md">
@@ -103,15 +242,14 @@ export default function SetPassword() {
     <div className="min-h-screen flex items-center justify-center bg-background p-4">
       <Card className="w-full max-w-md animate-fade-in">
         <CardHeader className="text-center space-y-4">
-          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-xl bg-primary">
-            <Building2 className="h-7 w-7 text-primary-foreground" />
-          </div>
+          <AppLogo className="items-center" imageClassName="max-w-[280px]" />
           <div>
             <CardTitle className="text-2xl font-bold">Set Your Password</CardTitle>
             <CardDescription>
-              Welcome to Microtech London HR Portal
+              Welcome to the Micro Tech London Ltd HR Portal
               {invitation.name && <span className="block mt-1 font-medium text-foreground">{invitation.name}</span>}
               <span className="block text-xs mt-1">{invitation.email}</span>
+              {invitation.position && <span className="block text-xs mt-1">{invitation.position}</span>}
             </CardDescription>
           </div>
         </CardHeader>
@@ -142,7 +280,7 @@ export default function SetPassword() {
             </div>
             <Button type="submit" className="w-full" disabled={loading}>
               {loading && <Loader2 className="animate-spin" />}
-              Create Account
+              {invitation.mode === "auth-invite" ? "Activate Account" : "Create Account"}
             </Button>
           </form>
         </CardContent>

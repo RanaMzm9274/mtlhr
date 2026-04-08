@@ -1,4 +1,5 @@
-import { Outlet } from "react-router-dom";
+import { useState } from "react";
+import { Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import {
   Sidebar,
@@ -14,8 +15,10 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { NavLink } from "@/components/NavLink";
-import { Building2, LayoutDashboard, Users, CalendarDays, FileText, User, LogOut, Settings } from "lucide-react";
+import { LayoutDashboard, Users, CalendarDays, FileText, User, LogOut, Settings, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { AppLogo } from "@/components/AppLogo";
+import { useToast } from "@/hooks/use-toast";
 
 const adminItems = [
   { title: "Dashboard", url: "/admin/dashboard", icon: LayoutDashboard },
@@ -36,23 +39,37 @@ const employeeItems = [
 
 function AppSidebar() {
   const { role, signOut, user } = useAuth();
+  const { toast } = useToast();
+  const navigate = useNavigate();
   const { state } = useSidebar();
+  const [signingOut, setSigningOut] = useState(false);
   const collapsed = state === "collapsed";
   const items = role === "admin" ? adminItems : employeeItems;
+
+  const handleSignOut = async () => {
+    if (signingOut) return;
+    setSigningOut(true);
+    try {
+      await signOut();
+      navigate("/login", { replace: true });
+    } catch (err: any) {
+      toast({ title: "Sign out failed", description: err.message, variant: "destructive" });
+    } finally {
+      setSigningOut(false);
+    }
+  };
 
   return (
     <Sidebar collapsible="icon">
       <SidebarContent className="flex flex-col h-full">
-        <div className="p-4 flex items-center gap-3">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-sidebar-primary">
-            <Building2 className="h-5 w-5 text-sidebar-primary-foreground" />
-          </div>
-          {!collapsed && (
-            <div className="min-w-0">
-              <p className="text-sm font-semibold text-sidebar-foreground truncate">Microtech London</p>
-              <p className="text-xs text-sidebar-foreground/60 truncate">HR Portal</p>
-            </div>
-          )}
+        <div className="p-4">
+          <AppLogo
+            boxed
+            className={collapsed ? "items-center" : ""}
+            imageClassName={collapsed ? "h-7 w-7" : "h-10 max-w-[180px]"}
+            subtitle={collapsed ? undefined : "HR Portal"}
+            subtitleClassName="text-sidebar-foreground/60"
+          />
         </div>
 
         <SidebarGroup>
@@ -81,10 +98,11 @@ function AppSidebar() {
             variant="ghost"
             size={collapsed ? "icon" : "default"}
             className="w-full text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent justify-start"
-            onClick={signOut}
+            onClick={handleSignOut}
+            disabled={signingOut}
           >
-            <LogOut className="h-4 w-4" />
-            {!collapsed && <span className="ml-2">Sign out</span>}
+            {signingOut ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogOut className="h-4 w-4" />}
+            {!collapsed && <span className="ml-2">{signingOut ? "Signing out..." : "Sign out"}</span>}
           </Button>
         </div>
       </SidebarContent>
