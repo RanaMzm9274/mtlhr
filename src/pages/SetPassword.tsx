@@ -16,27 +16,25 @@ export default function SetPassword() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [validating, setValidating] = useState(true);
-  const [invitation, setInvitation] = useState<any>(null);
+  const [invitation, setInvitation] = useState<{ email: string; name: string; position: string } | null>(null);
   const token = searchParams.get("token");
 
   useEffect(() => {
     if (!token) { setValidating(false); return; }
-    supabase
-      .from("invitations")
-      .select("*")
-      .eq("token", token)
-      .eq("used", false)
-      .maybeSingle()
-      .then(({ data }) => {
-        if (data && new Date(data.expires_at) > new Date()) {
-          setInvitation(data);
-        }
-        setValidating(false);
-      });
+
+    supabase.functions.invoke("validate-invitation", {
+      body: { token },
+    }).then(({ data, error }) => {
+      if (!error && data?.valid) {
+        setInvitation({ email: data.email, name: data.name, position: data.position });
+      }
+      setValidating(false);
+    });
   }, [token]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!invitation) return;
     if (password !== confirmPassword) {
       toast({ title: "Passwords don't match", variant: "destructive" });
       return;
@@ -48,26 +46,24 @@ export default function SetPassword() {
 
     setLoading(true);
     try {
-      // Sign up the user
       const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
         email: invitation.email,
         password,
-        options: { data: { name: (invitation as any).name || invitation.email.split("@")[0] } },
+        options: { data: { name: invitation.name || invitation.email.split("@")[0] } },
       });
 
       if (signUpError) throw signUpError;
 
-      // Mark invitation as used
-      await supabase.from("invitations").update({ used: true }).eq("id", invitation.id);
+      // Mark invitation as used via secure edge function
+      await supabase.functions.invoke("use-invitation", { body: { token } });
 
-      // Set up employee profile and role
       if (signUpData.user) {
         await supabase.from("user_roles").insert({ user_id: signUpData.user.id, role: "employee" as any });
         await supabase
           .from("employee_profiles")
           .update({
-            name: (invitation as any).name || "",
-            position: (invitation as any).position || "",
+            name: invitation.name || "",
+            position: invitation.position || "",
             status: "active",
           } as any)
           .eq("user_id", signUpData.user.id);
@@ -114,7 +110,7 @@ export default function SetPassword() {
             <CardTitle className="text-2xl font-bold">Set Your Password</CardTitle>
             <CardDescription>
               Welcome to Microtech London HR Portal
-              {(invitation as any).name && <span className="block mt-1 font-medium text-foreground">{(invitation as any).name}</span>}
+              {invitation.name && <span className="block mt-1 font-medium text-foreground">{invitation.name}</span>}
               <span className="block text-xs mt-1">{invitation.email}</span>
             </CardDescription>
           </div>
