@@ -60,6 +60,7 @@ function AppRoutes() {
 
       {/* Admin routes */}
       <Route path="/admin" element={<ProtectedRoute requiredRole="admin"><DashboardLayout /></ProtectedRoute>}>
+        <Route index element={<Navigate to="/admin/dashboard" replace />} />
         <Route path="dashboard" element={<AdminDashboard />} />
         <Route path="employees" element={<EmployeeList />} />
         <Route path="leaves" element={<AdminLeaves />} />
@@ -70,6 +71,7 @@ function AppRoutes() {
 
       {/* Employee routes */}
       <Route path="/employee" element={<ProtectedRoute requiredRole="employee"><DashboardLayout /></ProtectedRoute>}>
+        <Route index element={<Navigate to="/employee/dashboard" replace />} />
         <Route path="dashboard" element={<EmployeeDashboard />} />
         <Route path="profile" element={<EmployeeProfile />} />
         <Route path="documents" element={<EmployeeDocuments />} />
