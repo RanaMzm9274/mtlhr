@@ -44,6 +44,8 @@ export interface LeaveRecord {
   updated_at?: string;
 }
 
+export type DocumentPreviewKind = "image" | "pdf" | "unsupported";
+
 const firstString = (...values: unknown[]) => {
   for (const value of values) {
     if (typeof value === "string" && value.trim()) return value.trim();
@@ -54,6 +56,26 @@ const firstString = (...values: unknown[]) => {
 const firstNullableString = (...values: unknown[]) => {
   const value = firstString(...values);
   return value || null;
+};
+
+const normalizeLeaveStatus = (value: unknown) => {
+  switch (firstString(value).toLowerCase()) {
+    case "approved":
+      return "approved";
+    case "rejected":
+      return "rejected";
+    case "pending":
+    default:
+      return "pending";
+  }
+};
+
+const normalizeLeaveType = (value: unknown) => {
+  const normalized = firstString(value).toLowerCase();
+  if (["annual", "sick", "personal", "maternity", "paternity", "unpaid"].includes(normalized)) {
+    return normalized;
+  }
+  return "annual";
 };
 
 export const getProfileCompletion = (profile: Pick<ProfileRecord, "name" | "email" | "phone" | "gender" | "position" | "id_passport">) => {
@@ -107,13 +129,13 @@ export const normalizeDocumentRecord = (row: AnyRecord): DocumentRecord => ({
 export const normalizeLeaveRecord = (row: AnyRecord): LeaveRecord => ({
   id: firstString(row?.id),
   user_id: firstString(row?.user_id, row?.employee_id),
-  leave_type: firstString(row?.leave_type, row?.type),
+  leave_type: normalizeLeaveType(firstString(row?.leave_type, row?.type)),
   start_date: firstString(row?.start_date),
   end_date: firstString(row?.end_date),
-  days: typeof row?.days === "number" ? row.days : calculateLeaveDays(firstString(row?.start_date), firstString(row?.end_date)),
+  days: typeof row?.days === "number" ? row.days : Number(row?.days) > 0 ? Number(row?.days) : calculateLeaveDays(firstString(row?.start_date), firstString(row?.end_date)),
   reason: firstString(row?.reason),
-  status: firstString(row?.status, "pending"),
-  admin_comment: firstNullableString(row?.admin_comment, row?.comment),
+  status: normalizeLeaveStatus(row?.status),
+  admin_comment: firstNullableString(row?.admin_comment, row?.admin_remark, row?.comment),
   created_at: firstString(row?.created_at, new Date().toISOString()),
   updated_at: firstString(row?.updated_at) || undefined,
 });
@@ -123,8 +145,6 @@ export const buildDocumentInsertPayload = (userId: string, path: string, file: F
 
   return {
     user_id: userId,
-    employee_id: userId,
-    uploaded_by: userId,
     file_url: path,
     storage_path: path,
     file_name: file.name,
@@ -136,13 +156,13 @@ export const buildDocumentInsertPayload = (userId: string, path: string, file: F
 
 export const buildLeaveInsertPayload = (userId: string, leave: Pick<LeaveRecord, "leave_type" | "start_date" | "end_date" | "reason">) => ({
   user_id: userId,
-  employee_id: userId,
-  leave_type: leave.leave_type,
-  type: leave.leave_type,
+  leave_type: normalizeLeaveType(leave.leave_type),
+  type: normalizeLeaveType(leave.leave_type),
   start_date: leave.start_date,
   end_date: leave.end_date,
   days: calculateLeaveDays(leave.start_date, leave.end_date),
   reason: leave.reason,
+  status: normalizeLeaveStatus("pending"),
   admin_comment: "",
 });
 
@@ -233,6 +253,44 @@ export const inferDocumentCategory = (fileName?: string, fileType?: string) => {
   if (value.includes("cv") || value.includes("resume")) return "cv";
   if (value.includes("passport") || value.includes("id")) return "id_proof";
   return "certificate";
+};
+
+export const getDocumentPreviewKind = (fileName?: string, fileType?: string): DocumentPreviewKind => {
+  const value = `${fileType ?? ""} ${fileName ?? ""}`.toLowerCase();
+  if (["png", "jpg", "jpeg", "webp", "gif", "bmp", "svg"].some((ext) => value.includes(ext))) {
+    return "image";
+  }
+  if (value.includes("pdf")) {
+    return "pdf";
+  }
+  return "unsupported";
+};
+
+export const requestDocumentSignedUrl = async (
+  supabase: SupabaseClient<Database>,
+  storagePath: string,
+  expiresIn = 300,
+) => {
+  const normalizedPath = firstString(storagePath);
+  if (!normalizedPath) {
+    throw new Error("This document record has no storage path.");
+  }
+
+  const { data, error } = await withTimeout(
+    supabase.storage.from("documents").createSignedUrl(normalizedPath, expiresIn),
+    SUPABASE_REQUEST_TIMEOUT_MS,
+    "Document preview link",
+  );
+
+  if (error) {
+    throw error;
+  }
+
+  if (!data?.signedUrl) {
+    throw new Error("Signed URL could not be created.");
+  }
+
+  return data.signedUrl;
 };
 
 export const indexProfilesByUserId = (profiles: AnyRecord[] = [], users: Array<Pick<User, "id" | "email" | "user_metadata">> = []) => {

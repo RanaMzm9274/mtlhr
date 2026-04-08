@@ -3,7 +3,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CalendarDays, FileText, User, CheckCircle2 } from "lucide-react";
-import { normalizeProfileRecord } from "@/lib/hrPortal";
+import { normalizeLeaveRecord, normalizeProfileRecord } from "@/lib/hrPortal";
 import { SUPABASE_REQUEST_TIMEOUT_MS, withTimeoutFallback } from "@/lib/async";
 
 export default function EmployeeDashboard() {
@@ -34,11 +34,12 @@ export default function EmployeeDashboard() {
         if (leavesError) throw leavesError;
 
         const normalizedProfile = normalizeProfileRecord((prof as any[])?.[0], user);
+        const normalizedLeaves = ((leaves as any[]) ?? []).map((leave) => normalizeLeaveRecord(leave));
         setProfile(normalizedProfile);
         setStats({
           docs: docs?.length ?? 0,
-          pendingLeaves: leaves?.filter((l) => l.status === "pending").length ?? 0,
-          approvedLeaves: leaves?.filter((l) => l.status === "approved").length ?? 0,
+          pendingLeaves: normalizedLeaves.filter((leave) => leave.status === "pending").length,
+          approvedLeaves: normalizedLeaves.filter((leave) => leave.status === "approved").length,
         });
       } catch (err) {
         console.error("Failed to fetch employee dashboard:", err);

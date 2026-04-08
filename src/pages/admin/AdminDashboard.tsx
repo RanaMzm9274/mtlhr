@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Users, UserCheck, UserX, CalendarClock } from "lucide-react";
-import { filterEmployeeProfiles, normalizeProfileRecord } from "@/lib/hrPortal";
+import { filterEmployeeProfiles, normalizeLeaveRecord, normalizeProfileRecord } from "@/lib/hrPortal";
 import { SUPABASE_REQUEST_TIMEOUT_MS, withTimeoutFallback } from "@/lib/async";
 
 export default function AdminDashboard() {
@@ -14,7 +14,7 @@ export default function AdminDashboard() {
         const [{ data: profiles, error: profilesError }, { data: leaves, error: leavesError }, { data: roleRows, error: rolesError }] = await withTimeoutFallback(
           Promise.all([
             supabase.from("employee_profiles").select("*"),
-            supabase.from("leave_requests").select("status").eq("status", "pending"),
+            supabase.from("leave_requests").select("status"),
             supabase.from("user_roles").select("user_id, role"),
           ]),
           [
@@ -31,10 +31,11 @@ export default function AdminDashboard() {
 
         const normalizedProfiles = ((profiles as any[]) ?? []).map((profile) => normalizeProfileRecord(profile));
         const employeeProfiles = filterEmployeeProfiles(normalizedProfiles, roleRows ?? []);
+        const normalizedLeaves = ((leaves as any[]) ?? []).map((leave) => normalizeLeaveRecord(leave));
         const total = employeeProfiles.length;
         const active = employeeProfiles.filter((profile) => profile.status === "active").length;
         const inactive = employeeProfiles.filter((profile) => profile.status === "inactive").length;
-        setStats({ total, active, inactive, pendingLeaves: leaves?.length ?? 0 });
+        setStats({ total, active, inactive, pendingLeaves: normalizedLeaves.filter((leave) => leave.status === "pending").length });
       } catch (err) {
         console.error("Failed to fetch admin dashboard:", err);
       }

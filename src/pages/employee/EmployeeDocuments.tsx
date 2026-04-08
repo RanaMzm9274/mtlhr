@@ -72,6 +72,7 @@ export default function EmployeeDocuments() {
     }
 
     setUploading(true);
+    let uploadedPath: string | null = null;
     try {
       const ext = file.name.split(".").pop();
       const path = `${user.id}/${crypto.randomUUID()}.${ext}`;
@@ -81,6 +82,7 @@ export default function EmployeeDocuments() {
         "Document upload",
       );
       if (uploadError) throw uploadError;
+      uploadedPath = path;
 
       const payload = buildDocumentInsertPayload(user.id, path, file, category);
       const { error: dbError } = await withTimeout(
@@ -93,6 +95,13 @@ export default function EmployeeDocuments() {
       toast({ title: "Document uploaded" });
       fetchDocs();
     } catch (err: any) {
+      if (uploadedPath) {
+        await withTimeout(
+          supabase.storage.from("documents").remove([uploadedPath]),
+          SUPABASE_REQUEST_TIMEOUT_MS,
+          "Document upload rollback",
+        ).catch(() => undefined);
+      }
       toast({ title: "Upload failed", description: err.message, variant: "destructive" });
     } finally {
       setUploading(false);

@@ -333,13 +333,13 @@ export default function EmployeeList() {
               ) : (
                 paged.map((employee) => (
                   <TableRow key={employee.id ?? employee.user_id ?? employee.email}>
-                    <TableCell className="font-medium">{employee.name || "—"}</TableCell>
-                    <TableCell>{employee.email || "—"}</TableCell>
-                    <TableCell>{employee.position || "—"}</TableCell>
-                    <TableCell>{employee.phone || "—"}</TableCell>
+                    <TableCell className="font-medium">{employee.name || "-"}</TableCell>
+                    <TableCell>{employee.email || "-"}</TableCell>
+                    <TableCell>{employee.position || "-"}</TableCell>
+                    <TableCell>{employee.phone || "-"}</TableCell>
                     <TableCell>{statusBadge(employee.status)}</TableCell>
                     <TableCell className="text-muted-foreground">
-                      {employee.created_at ? new Date(employee.created_at).toLocaleDateString() : "—"}
+                      {employee.created_at ? new Date(employee.created_at).toLocaleDateString() : "-"}
                     </TableCell>
                     <TableCell>
                       <Button
@@ -363,7 +363,7 @@ export default function EmployeeList() {
           {totalPages > 1 && (
             <div className="flex items-center justify-between mt-4 pt-4 border-t">
               <p className="text-sm text-muted-foreground">
-                Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, processed.length)} of {processed.length}
+                Showing {(page - 1) * PAGE_SIZE + 1}-{Math.min(page * PAGE_SIZE, processed.length)} of {processed.length}
               </p>
               <div className="flex gap-1">
                 <Button variant="outline" size="sm" disabled={page === 1} onClick={() => setPage(page - 1)}>
