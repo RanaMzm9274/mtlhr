@@ -54,8 +54,9 @@ export default function SetPassword() {
 
       if (signUpError) throw signUpError;
 
-      // Mark invitation as used via edge function or direct update won't work due to RLS
-      // The signup trigger creates the profile; we need to update it with name/position
+      // Mark invitation as used via secure edge function
+      await supabase.functions.invoke("use-invitation", { body: { token } });
+
       if (signUpData.user) {
         await supabase.from("user_roles").insert({ user_id: signUpData.user.id, role: "employee" as any });
         await supabase
