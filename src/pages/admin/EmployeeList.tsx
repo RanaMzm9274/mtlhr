@@ -15,7 +15,6 @@ import {
 } from "@/components/ui/dialog";
 import {
   AlertDialog,
-  AlertDialogAction,
   AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
@@ -62,6 +61,7 @@ export default function EmployeeList() {
   const [page, setPage] = useState(1);
   const [deleteTarget, setDeleteTarget] = useState<Employee | null>(null);
   const [deleteStep, setDeleteStep] = useState<1 | 2>(1);
+  const [deleteConfirmInput, setDeleteConfirmInput] = useState("");
   const [deleting, setDeleting] = useState(false);
 
   const fetchEmployees = async () => {
@@ -163,20 +163,32 @@ export default function EmployeeList() {
   };
 
   const handleDeleteFinalConfirm = async () => {
-    if (!deleteTarget?.user_id) return;
+    if (!deleteTarget) return;
     setDeleting(true);
     try {
+      const targetUserId = deleteTarget.user_id || null;
+      const targetProfileId = deleteTarget.id || null;
+      const targetEmail = deleteTarget.email || null;
+      if (!targetUserId && !targetProfileId && !targetEmail) {
+        throw new Error("Missing employee identifier for deletion.");
+      }
+
       const headers = await getFunctionAuthHeaders();
       const { data, error } = await withTimeout(
         supabase.functions.invoke("delete-employee", {
           headers,
-          body: { user_id: deleteTarget.user_id },
+          body: {
+            user_id: targetUserId,
+            profile_id: targetProfileId,
+            email: targetEmail,
+          },
         }),
         SUPABASE_REQUEST_TIMEOUT_MS,
         "Employee deletion",
       );
 
       if (error) throw error;
+      if (data?.fallback) throw new Error(data.error || "Employee deletion failed.");
       if (data?.error) throw new Error(data.error);
 
       toast({
@@ -185,6 +197,7 @@ export default function EmployeeList() {
       });
       setDeleteTarget(null);
       setDeleteStep(1);
+      setDeleteConfirmInput("");
       fetchEmployees();
     } catch (err: any) {
       toast({ title: "Error deleting employee", description: err.message, variant: "destructive" });
@@ -196,6 +209,7 @@ export default function EmployeeList() {
   const handleDeleteCancel = () => {
     setDeleteTarget(null);
     setDeleteStep(1);
+    setDeleteConfirmInput("");
   };
 
   const processed = useMemo(() => {
@@ -383,37 +397,47 @@ export default function EmployeeList() {
         </CardContent>
       </Card>
 
-      <AlertDialog open={!!deleteTarget && deleteStep === 1} onOpenChange={(open) => { if (!open) handleDeleteCancel(); }}>
+      <AlertDialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) handleDeleteCancel(); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete Employee</AlertDialogTitle>
+            <AlertDialogTitle className={deleteStep === 2 ? "text-destructive" : ""}>
+              {deleteStep === 1 ? "Delete Employee" : "Final Confirmation"}
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to delete <strong>{deleteTarget?.name || deleteTarget?.email}</strong>? This will remove their profile, documents, leave requests, and account access.
+              {deleteStep === 1 ? (
+                <>
+                  Are you sure you want to delete <strong>{deleteTarget?.name || deleteTarget?.email}</strong>? This will remove their profile, documents, leave requests, and account access.
+                </>
+              ) : (
+                <>
+                  This action is <strong>permanent and cannot be undone</strong>. All data for <strong>{deleteTarget?.name || deleteTarget?.email}</strong> will be permanently deleted. Are you absolutely sure?
+                </>
+              )}
             </AlertDialogDescription>
+            {deleteStep === 2 && (
+              <div className="space-y-2 pt-2">
+                <Label htmlFor="delete-confirm-input">Type <strong>DELETE</strong> to confirm</Label>
+                <Input
+                  id="delete-confirm-input"
+                  value={deleteConfirmInput}
+                  onChange={(e) => setDeleteConfirmInput(e.target.value)}
+                  placeholder="DELETE"
+                />
+              </div>
+            )}
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel onClick={handleDeleteCancel}>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDeleteStep1Confirm} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-              Yes, Continue
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      <AlertDialog open={!!deleteTarget && deleteStep === 2} onOpenChange={(open) => { if (!open) handleDeleteCancel(); }}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle className="text-destructive">Final Confirmation</AlertDialogTitle>
-            <AlertDialogDescription>
-              This action is <strong>permanent and cannot be undone</strong>. All data for <strong>{deleteTarget?.name || deleteTarget?.email}</strong> will be permanently deleted. Are you absolutely sure?
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel onClick={handleDeleteCancel}>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDeleteFinalConfirm} disabled={deleting} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-              {deleting && <Loader2 className="animate-spin mr-2 h-4 w-4" />}
-              Delete Permanently
-            </AlertDialogAction>
+            {deleteStep === 1 ? (
+              <Button type="button" onClick={handleDeleteStep1Confirm} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+                Yes, Continue
+              </Button>
+            ) : (
+              <Button type="button" onClick={handleDeleteFinalConfirm} disabled={deleting || deleteConfirmInput.trim() !== "DELETE"} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+                {deleting && <Loader2 className="animate-spin mr-2 h-4 w-4" />}
+                Delete Permanently
+              </Button>
+            )}
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

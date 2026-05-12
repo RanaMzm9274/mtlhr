@@ -15,9 +15,13 @@ export function AppLogo({
   subtitle,
   subtitleClassName,
 }: AppLogoProps) {
+  const assetBase =
+    (window as Window & { MTLHR_PORTAL_ASSET_BASE?: string }).MTLHR_PORTAL_ASSET_BASE || "";
+  const normalizedBase = assetBase.endsWith("/") ? assetBase.slice(0, -1) : assetBase;
+
   const image = (
     <img
-      src="/branding/microtech-logo.png"
+      src={`${normalizedBase}/branding/microtech-logo.png`}
       alt="Micro Tech London Ltd"
       className={cn("h-auto w-full object-contain", imageClassName)}
     />

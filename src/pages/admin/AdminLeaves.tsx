@@ -21,7 +21,7 @@ import { Check, X, Loader2, MessageSquare, ArrowUp, ArrowDown, ChevronLeft, Chev
 import { useToast } from "@/hooks/use-toast";
 import { removeUndefined } from "@/lib/utils";
 import { indexProfilesByUserId, normalizeLeaveRecord, type LeaveRecord, type ProfileRecord } from "@/lib/hrPortal";
-import { SUPABASE_REQUEST_TIMEOUT_MS, withTimeout, withTimeoutFallback } from "@/lib/async";
+import { SUPABASE_REQUEST_TIMEOUT_MS, withTimeoutFallback } from "@/lib/async";
 
 interface LeaveRequest extends LeaveRecord {
   employee: ProfileRecord | null;
@@ -211,19 +211,33 @@ export default function AdminLeaves() {
               ) : (
                 paged.map((leave) => (
                   <TableRow key={leave.id}>
-                    <TableCell className="font-medium">{leave.employee?.name || leave.employee?.email || "—"}</TableCell>
+                    <TableCell className="font-medium">{leave.employee?.name || leave.employee?.email || "-"}</TableCell>
                     <TableCell className="capitalize">{leave.leave_type}</TableCell>
                     <TableCell>{new Date(leave.start_date).toLocaleDateString()}</TableCell>
                     <TableCell>{new Date(leave.end_date).toLocaleDateString()}</TableCell>
                     <TableCell>{statusBadge(leave.status)}</TableCell>
                     <TableCell>
-                      {leave.status === "pending" ? (
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          size="sm"
+                          className="bg-success hover:bg-success/90 text-success-foreground"
+                          onClick={() => handleAction(leave.id, "approved")}
+                          disabled={updating || leave.status === "approved"}
+                        >
+                          <Check className="h-4 w-4 mr-1" /> Approve
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          onClick={() => handleAction(leave.id, "rejected")}
+                          disabled={updating || leave.status === "rejected"}
+                        >
+                          <X className="h-4 w-4 mr-1" /> Reject
+                        </Button>
                         <Button variant="outline" size="sm" onClick={() => { setSelectedLeave(leave); setComment(leave.admin_comment ?? ""); }}>
                           <MessageSquare className="h-4 w-4 mr-1" /> Review
                         </Button>
-                      ) : (
-                        <span className="text-xs text-muted-foreground">—</span>
-                      )}
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))
@@ -234,7 +248,7 @@ export default function AdminLeaves() {
           {totalPages > 1 && (
             <div className="flex items-center justify-between mt-4 pt-4 border-t">
               <p className="text-sm text-muted-foreground">
-                Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, processed.length)} of {processed.length}
+                Showing {(page - 1) * PAGE_SIZE + 1}-{Math.min(page * PAGE_SIZE, processed.length)} of {processed.length}
               </p>
               <div className="flex gap-1">
                 <Button variant="outline" size="sm" disabled={page === 1} onClick={() => setPage(page - 1)}>

@@ -189,7 +189,9 @@ export default function EmployeeLeave() {
                     <TableCell>{new Date(leave.end_date).toLocaleDateString()}</TableCell>
                     <TableCell className="max-w-[200px] truncate">{leave.reason}</TableCell>
                     <TableCell>{statusBadge(leave.status)}</TableCell>
-                    <TableCell className="text-sm text-muted-foreground max-w-[150px] truncate">{leave.admin_comment || "—"}</TableCell>
+                    <TableCell className="text-sm text-muted-foreground whitespace-pre-wrap break-words">
+                      {leave.admin_comment || "-"}
+                    </TableCell>
                   </TableRow>
                 ))
               )}

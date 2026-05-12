@@ -92,7 +92,7 @@ const App = () => (
     <TooltipProvider>
       <Toaster />
       <Sonner />
-      <BrowserRouter>
+      <BrowserRouter basename={(window as Window & { MTLHR_PORTAL_BASE_PATH?: string }).MTLHR_PORTAL_BASE_PATH || "/"}>
         <AuthProvider>
           <AppRoutes />
         </AuthProvider>
