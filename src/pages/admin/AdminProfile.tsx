@@ -16,10 +16,11 @@ export default function AdminProfile() {
   const { user } = useAuth();
   const { toast } = useToast();
   const [profile, setProfile] = useState({
-    name: "", email: "", phone: "", gender: "", position: "", id_passport: "", license: "",
+    name: "", email: "", phone: "", gender: "", position: "", id_passport: "", license: "", avatar_url: "",
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [uploadingImage, setUploadingImage] = useState(false);
 
   useEffect(() => {
     if (!user) {
@@ -48,6 +49,7 @@ export default function AdminProfile() {
           position: normalized.position,
           id_passport: normalized.id_passport,
           license: normalized.license,
+          avatar_url: normalized.avatar_url || "",
         });
       } catch (err) {
         console.error("Error fetching admin profile:", err);
@@ -71,6 +73,7 @@ export default function AdminProfile() {
           position: profile.position,
           id_passport: profile.id_passport,
           license: profile.license,
+          avatar_url: profile.avatar_url || null,
           profile_completed: false,
         }),
         status: "active",
@@ -85,12 +88,31 @@ export default function AdminProfile() {
         position: normalized.position,
         id_passport: normalized.id_passport,
         license: normalized.license,
+        avatar_url: normalized.avatar_url || "",
       });
       toast({ title: "Profile updated" });
     } catch (err: any) {
       toast({ title: "Error", description: err.message, variant: "destructive" });
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleAvatarUpload = async (file?: File) => {
+    if (!user || !file) return;
+    setUploadingImage(true);
+    try {
+      const ext = file.name.split(".").pop()?.toLowerCase() || "jpg";
+      const path = `${user.id}/avatars/admin-${Date.now()}.${ext}`;
+      const { error: uploadError } = await supabase.storage.from("profile-images").upload(path, file, { upsert: true });
+      if (uploadError) throw uploadError;
+      const { data } = supabase.storage.from("profile-images").getPublicUrl(path);
+      setProfile((prev) => ({ ...prev, avatar_url: data.publicUrl }));
+      toast({ title: "Image uploaded", description: "Click Save Changes to apply profile image." });
+    } catch (err: any) {
+      toast({ title: "Upload failed", description: err.message, variant: "destructive" });
+    } finally {
+      setUploadingImage(false);
     }
   };
 
@@ -142,6 +164,20 @@ export default function AdminProfile() {
               <div className="space-y-2 sm:col-span-2">
                 <Label>License / Certification</Label>
                 <Input value={profile.license} onChange={(e) => setProfile({ ...profile, license: e.target.value })} placeholder="e.g. UK Driving License, CSCS Card" />
+              </div>
+              <div className="space-y-2 sm:col-span-2">
+                <Label>Profile Picture</Label>
+                <div className="flex items-center gap-3">
+                  {profile.avatar_url ? (
+                    <img src={profile.avatar_url} alt="Profile" className="h-12 w-12 rounded-full object-cover border" />
+                  ) : (
+                    <div className="h-12 w-12 rounded-full bg-primary/15 text-primary flex items-center justify-center text-sm font-semibold border">
+                      {(profile.name || "A").trim().charAt(0).toUpperCase()}
+                    </div>
+                  )}
+                  <Input type="file" accept="image/*" disabled={uploadingImage} onChange={(e) => handleAvatarUpload(e.target.files?.[0])} />
+                </div>
+                {uploadingImage && <p className="text-xs text-muted-foreground flex items-center gap-1"><Loader2 className="h-3 w-3 animate-spin" /> Uploading image...</p>}
               </div>
             </div>
             <Button type="submit" disabled={saving}>

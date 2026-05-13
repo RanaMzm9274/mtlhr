@@ -66,7 +66,7 @@ export default function EmployeeDocuments() {
       toast({ title: "Invalid file type", description: "Only PDF, JPG, PNG allowed", variant: "destructive" });
       return;
     }
-    if (file.size > 10 * 1024 * 1024) {
+    if (file.size > 5 * 1024 * 1024) {
       toast({ title: "File too large", description: "Max 10MB", variant: "destructive" });
       return;
     }
@@ -144,7 +144,7 @@ export default function EmployeeDocuments() {
   };
 
   const categoryLabel = (cat: string) => {
-    const map: Record<string, string> = { id_proof: "ID Proof", cv: "CV", certificate: "Certificate" };
+    const map: Record<string, string> = { id_proof: "Passport", cv: "Share Code", certificate: "Work Permit" };
     return map[cat] || cat;
   };
 
@@ -157,7 +157,7 @@ export default function EmployeeDocuments() {
         </div>
       </div>
 
-      <Card>
+      <Card className="wf-panel">
         <CardHeader>
           <CardTitle className="text-base">Upload Document</CardTitle>
         </CardHeader>
@@ -168,9 +168,9 @@ export default function EmployeeDocuments() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="id_proof">ID Proof</SelectItem>
-                <SelectItem value="cv">CV</SelectItem>
-                <SelectItem value="certificate">Certificate</SelectItem>
+                <SelectItem value="id_proof">Passport</SelectItem>
+                <SelectItem value="cv">Share code</SelectItem>
+                <SelectItem value="certificate">Work Permit</SelectItem>
               </SelectContent>
             </Select>
             <input ref={fileRef} type="file" accept=".pdf,.jpg,.jpeg,.png" onChange={handleUpload} className="hidden" />
@@ -179,14 +179,14 @@ export default function EmployeeDocuments() {
               {uploading ? "Uploading..." : "Choose File"}
             </Button>
           </div>
-          <p className="text-xs text-muted-foreground mt-2">Accepted: PDF, JPG, PNG (max 10MB)</p>
+          <p className="text-xs text-muted-foreground mt-2">Accepted: PDF, JPG, PNG (max 5MB)</p>
         </CardContent>
       </Card>
 
-      <Card>
+      <Card className="wf-panel">
         <CardContent className="pt-6">
           <Table>
-            <TableHeader>
+            <TableHeader className="wf-table-head">
               <TableRow>
                 <TableHead>File</TableHead>
                 <TableHead>Category</TableHead>

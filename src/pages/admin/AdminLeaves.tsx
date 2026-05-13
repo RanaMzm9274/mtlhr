@@ -150,25 +150,25 @@ export default function AdminLeaves() {
   };
 
   return (
-    <div className="space-y-6 animate-fade-in">
+    <div className="space-y-8 animate-fade-in">
       <div>
         <h1 className="text-2xl font-bold">Leave Requests</h1>
         <p className="text-muted-foreground">Manage employee leave applications</p>
       </div>
 
-      <Card>
+      <Card className="wf-panel">
         <CardHeader className="pb-3">
           <div className="flex gap-2">
             {(["all", "pending", "approved", "rejected"] as const).map((value) => (
               <Button
                 key={value}
-                variant={filter === value ? "default" : "outline"}
+                variant="outline"
                 size="sm"
                 onClick={() => {
                   setFilter(value);
                   setPage(1);
                 }}
-                className="capitalize"
+                className={`capitalize ${filter === value ? "wf-filter-btn-active" : "wf-filter-btn"}`}
               >
                 {value}
               </Button>
@@ -177,7 +177,7 @@ export default function AdminLeaves() {
         </CardHeader>
         <CardContent>
           <Table>
-            <TableHeader>
+            <TableHeader className="wf-table-head">
               <TableRow>
                 <TableHead className="cursor-pointer select-none" onClick={() => handleSort("employee")}>
                   Employee <SortIcon col="employee" />

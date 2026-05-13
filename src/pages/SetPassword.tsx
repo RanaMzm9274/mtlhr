@@ -19,6 +19,9 @@ interface InvitationState {
   name: string;
   position: string;
   mode: InvitationMode;
+  companySlug?: string | null;
+  companyName?: string | null;
+  companyLogoUrl?: string | null;
 }
 
 const buildInvitationFromUser = (user: User): InvitationState => {
@@ -41,13 +44,87 @@ export default function SetPassword() {
   const [validating, setValidating] = useState(true);
   const [invitation, setInvitation] = useState<InvitationState | null>(null);
   const token = searchParams.get("token");
+  const companyInitials = (invitation?.companyName || "Company")
+    .split(" ")
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? "")
+    .join("");
+
+  const resolveCompanyById = async (companyId: string) => {
+    const { data: companyRow } = await withTimeout(
+      supabase
+        .from("companies")
+        .select("slug,name,logo_url")
+        .eq("id", companyId)
+        .maybeSingle(),
+      SUPABASE_REQUEST_TIMEOUT_MS,
+      "Invitation company lookup",
+    );
+
+    return {
+      companySlug: companyRow?.slug ?? null,
+      companyName: companyRow?.name ?? null,
+      companyLogoUrl: companyRow?.logo_url ?? null,
+    };
+  };
+
+  const resolveCompanyByUserId = async (userId: string) => {
+    const { data: membershipRow } = await withTimeout(
+      supabase
+        .from("company_memberships")
+        .select("company_id")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+      SUPABASE_REQUEST_TIMEOUT_MS,
+      "Membership lookup",
+    );
+
+    let companyId = membershipRow?.company_id ?? null;
+    if (!companyId) {
+      const { data: profileRow } = await withTimeout(
+        supabase
+          .from("employee_profiles")
+          .select("company_id")
+          .eq("user_id", userId)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+        SUPABASE_REQUEST_TIMEOUT_MS,
+        "Profile company lookup",
+      );
+      companyId = profileRow?.company_id ?? null;
+    }
+
+    if (!companyId) {
+      return {
+        companySlug: null,
+        companyName: null,
+        companyLogoUrl: null,
+      };
+    }
+
+    return resolveCompanyById(companyId);
+  };
 
   useEffect(() => {
     let mounted = true;
 
-    const setInvitationFromSession = (user: User | null) => {
+    const setInvitationFromSession = async (user: User | null) => {
       if (!mounted || !user) return false;
-      setInvitation(buildInvitationFromUser(user));
+      try {
+        const companyBrand = await resolveCompanyByUserId(user.id);
+        if (!mounted) return false;
+        setInvitation({
+          ...buildInvitationFromUser(user),
+          ...companyBrand,
+        });
+      } catch {
+        if (!mounted) return false;
+        setInvitation(buildInvitationFromUser(user));
+      }
       setValidating(false);
       return true;
     };
@@ -68,6 +145,9 @@ export default function SetPassword() {
             name: data.name,
             position: data.position,
             mode: "legacy-token",
+            companySlug: data.companySlug ?? null,
+            companyName: data.companyName ?? null,
+            companyLogoUrl: data.companyLogoUrl ?? null,
           });
         }
 
@@ -80,21 +160,21 @@ export default function SetPassword() {
         SUPABASE_REQUEST_TIMEOUT_MS,
         "Invitation session lookup",
       );
-      if (setInvitationFromSession(session?.user ?? null)) return;
+      if (await setInvitationFromSession(session?.user ?? null)) return;
 
       const { data: { user } } = await withTimeout(
         supabase.auth.getUser(),
         SUPABASE_REQUEST_TIMEOUT_MS,
         "Invitation user lookup",
       );
-      if (setInvitationFromSession(user ?? null)) return;
+      if (await setInvitationFromSession(user ?? null)) return;
 
       if (mounted) setValidating(false);
     };
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       if (!token && session?.user) {
-        setInvitationFromSession(session.user);
+        void setInvitationFromSession(session.user);
       }
     });
 
@@ -159,8 +239,9 @@ export default function SetPassword() {
           status: "active",
         } as any);
 
+        const brand = await resolveCompanyByUserId(user.id);
         toast({ title: "Account activated" });
-        navigate("/employee/dashboard");
+        navigate(brand.companySlug ? `/${brand.companySlug}/employee/dashboard` : "/login");
         return;
       }
 
@@ -208,8 +289,26 @@ export default function SetPassword() {
         status: "active",
       } as any);
 
-      toast({ title: "Account created", description: "You can now sign in." });
-      navigate("/login");
+      const { error: signInError } = await withTimeout(
+        supabase.auth.signInWithPassword({
+          email: invitation.email,
+          password,
+        }),
+        SUPABASE_REQUEST_TIMEOUT_MS,
+        "Auto sign in",
+      );
+      if (signInError) throw signInError;
+
+      const { data: { user: activatedUser } } = await withTimeout(
+        supabase.auth.getUser(),
+        SUPABASE_REQUEST_TIMEOUT_MS,
+        "Activated user lookup",
+      );
+
+      const brand = activatedUser ? await resolveCompanyByUserId(activatedUser.id) : null;
+
+      toast({ title: "Account created" });
+      navigate(brand?.companySlug ? `/${brand.companySlug}/employee/dashboard` : "/login");
     } catch (err: any) {
       toast({ title: "Error", description: err.message, variant: "destructive" });
     } finally {
@@ -242,11 +341,17 @@ export default function SetPassword() {
     <div className="min-h-screen flex items-center justify-center bg-background p-4">
       <Card className="w-full max-w-md animate-fade-in">
         <CardHeader className="text-center space-y-4">
-          <AppLogo className="items-center" imageClassName="max-w-[280px]" />
+          {invitation.companyLogoUrl ? (
+            <AppLogo className="items-center" imageClassName="max-w-[280px]" src={invitation.companyLogoUrl} alt={invitation.companyName || "Company"} />
+          ) : (
+            <div className="mx-auto h-16 w-16 rounded-full border bg-primary/10 text-primary flex items-center justify-center text-lg font-semibold">
+              {companyInitials || "C"}
+            </div>
+          )}
           <div>
             <CardTitle className="text-2xl font-bold">Set Your Password</CardTitle>
             <CardDescription>
-              Welcome to the Micro Tech London Ltd HR Portal
+              Welcome to the {invitation.companyName || "Company"} HR Portal
               {invitation.name && <span className="block mt-1 font-medium text-foreground">{invitation.name}</span>}
               <span className="block text-xs mt-1">{invitation.email}</span>
               {invitation.position && <span className="block text-xs mt-1">{invitation.position}</span>}

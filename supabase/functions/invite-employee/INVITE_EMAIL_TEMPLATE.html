@@ -1,0 +1,219 @@
+<!--
+Use this in Supabase Dashboard:
+Authentication -> Email Templates -> Invite user
+
+Subject suggestion:
+You're invited to {{ .Data.company_name }} HR Portal
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Employee Invitation - {{ .Data.company_name }}</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: #ffffff;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    table {
+      border-spacing: 0;
+      width: 100%;
+    }
+    td { padding: 0; }
+    img { border: 0; }
+    .wrapper {
+      width: 100%;
+      table-layout: fixed;
+      background-color: #ffffff;
+      padding-bottom: 40px;
+    }
+    .main {
+      background-color: #ffffff;
+      margin: 0 auto;
+      width: 100%;
+      max-width: 600px;
+      border-spacing: 0;
+      color: #000000;
+      text-align: center;
+    }
+    .header-logo { padding: 60px 0 40px 0; }
+    .headline {
+      font-size: 32px;
+      font-weight: 500;
+      margin: 0 0 20px 0;
+      color: #000000;
+    }
+    .body-text {
+      font-size: 16px;
+      line-height: 1.5;
+      color: #333333;
+      margin-bottom: 12px;
+      padding: 0 40px;
+    }
+    .body-meta {
+      font-size: 14px;
+      line-height: 1.5;
+      color: #555555;
+      margin-bottom: 10px;
+      padding: 0 40px;
+    }
+    .cta-container { padding: 20px 0; }
+    .cta-button {
+      display: inline-block;
+      background-color: #000000;
+      border-radius: 14px;
+      padding: 18px 0;
+      width: 320px;
+      font-size: 18px;
+      font-weight: 500;
+      color: #ffffff !important;
+      text-decoration: none;
+      max-width: 90%;
+    }
+    .expiry-text {
+      font-size: 14px;
+      color: #666666;
+      margin: 25px 0 16px 0;
+      padding: 0 30px;
+    }
+    .link-box {
+      font-size: 12px;
+      line-height: 1.5;
+      color: #444444;
+      background: #f7f7f7;
+      border: 1px solid #e6e6e6;
+      border-radius: 10px;
+      margin: 0 30px 22px 30px;
+      padding: 12px;
+      word-break: break-all;
+      text-align: left;
+    }
+    .disclaimer {
+      font-size: 14px;
+      line-height: 1.6;
+      color: #000000;
+      max-width: 460px;
+      margin: 0 auto 15px auto;
+    }
+    .support-link {
+      color: #409fff;
+      text-decoration: underline;
+    }
+    .divider {
+      border-top: 1px solid #e0e0e0;
+      margin: 50px auto 30px auto;
+      width: 320px;
+    }
+    .footer-links { margin-bottom: 30px; }
+    .footer-links a {
+      color: #888888;
+      text-decoration: underline;
+      font-size: 14px;
+      margin: 0 12px;
+    }
+    .footer-note {
+      font-size: 12px;
+      color: #888888;
+      line-height: 1.6;
+    }
+    .footer-note a {
+      color: #888888;
+      text-decoration: underline;
+    }
+    @media screen and (max-width: 480px) {
+      .headline { font-size: 26px; }
+      .body-text, .body-meta { padding: 0 20px; }
+      .cta-button {
+        width: 260px;
+        font-size: 16px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <center class="wrapper">
+    <table class="main" width="100%">
+      <tr>
+        <td class="header-logo">
+          <div style="font-size: 26px; font-weight: 700; color: #000000;">
+            {{ .Data.company_name }} HR Portal
+          </div>
+        </td>
+      </tr>
+
+      <tr>
+        <td>
+          <h1 class="headline">You're invited</h1>
+        </td>
+      </tr>
+
+      <tr>
+        <td>
+          <p class="body-text">
+            Hi {{ .Data.name }}, you were invited by {{ .Data.inviter_name }} to join {{ .Data.company_name }} on the HR Portal.
+          </p>
+          <p class="body-meta">
+            Position: <strong>{{ .Data.position }}</strong>
+          </p>
+          <p class="body-meta">
+            Email: <strong>{{ .Email }}</strong>
+          </p>
+        </td>
+      </tr>
+
+      <tr>
+        <td class="cta-container">
+          <a href="{{ .ConfirmationURL }}" class="cta-button">Join your workspace</a>
+        </td>
+      </tr>
+
+      <tr>
+        <td>
+          <p class="expiry-text">This invitation link will expire in 7 days.</p>
+          <div class="link-box">
+            If button does not work, open this link:<br>
+            <a href="{{ .ConfirmationURL }}" class="support-link">{{ .ConfirmationURL }}</a>
+          </div>
+        </td>
+      </tr>
+
+      <tr>
+        <td style="padding: 0 30px;">
+          <p class="disclaimer">
+            If you have trouble accessing your account, contact your company administrator.
+          </p>
+          <p class="disclaimer">
+            You can access portal login here:
+            <a href="{{ .Data.portal_url }}" class="support-link">{{ .Data.portal_url }}</a>
+          </p>
+        </td>
+      </tr>
+
+      <tr>
+        <td>
+          <div class="divider"></div>
+        </td>
+      </tr>
+
+      <tr>
+        <td class="footer-links">
+          <a href="{{ .Data.portal_url }}">Portal</a>
+          <a href="#">Privacy Policy</a>
+          <a href="#">Terms of Use</a>
+        </td>
+      </tr>
+
+      <tr>
+        <td class="footer-note" style="padding-bottom: 40px;">
+          This invitation was sent for {{ .Email }}.<br>
+          If you did not expect this, you can ignore this email.
+        </td>
+      </tr>
+    </table>
+  </center>
+</body>
+</html>

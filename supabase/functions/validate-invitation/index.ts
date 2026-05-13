@@ -31,7 +31,7 @@ Deno.serve(async (req) => {
 
     const { data, error } = await supabase
       .from('invitations')
-      .select('id, email, name, position, expires_at, used')
+      .select('id, email, name, position, expires_at, used, company_id')
       .eq('token', parsed.data.token)
       .eq('used', false)
       .maybeSingle()
@@ -50,12 +50,29 @@ Deno.serve(async (req) => {
       )
     }
 
+    let companySlug: string | null = null
+    let companyName: string | null = null
+    let companyLogoUrl: string | null = null
+    if (data.company_id) {
+      const { data: companyData } = await supabase
+        .from('companies')
+        .select('slug,name,logo_url')
+        .eq('id', data.company_id)
+        .maybeSingle()
+      companySlug = companyData?.slug ?? null
+      companyName = companyData?.name ?? null
+      companyLogoUrl = companyData?.logo_url ?? null
+    }
+
     return new Response(
       JSON.stringify({
         valid: true,
         email: data.email,
         name: data.name,
         position: data.position,
+        companySlug,
+        companyName,
+        companyLogoUrl,
       }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )

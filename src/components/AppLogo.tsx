@@ -6,6 +6,8 @@ interface AppLogoProps {
   boxed?: boolean;
   subtitle?: string;
   subtitleClassName?: string;
+  src?: string;
+  alt?: string;
 }
 
 export function AppLogo({
@@ -14,6 +16,8 @@ export function AppLogo({
   boxed = false,
   subtitle,
   subtitleClassName,
+  src,
+  alt = "Company logo",
 }: AppLogoProps) {
   const assetBase =
     (window as Window & { MTLHR_PORTAL_ASSET_BASE?: string }).MTLHR_PORTAL_ASSET_BASE || "";
@@ -21,8 +25,8 @@ export function AppLogo({
 
   const image = (
     <img
-      src={`${normalizedBase}/branding/microtech-logo.png`}
-      alt="Micro Tech London Ltd"
+      src={src || `${normalizedBase}/branding/microtech-logo.png`}
+      alt={alt}
       className={cn("h-auto w-full object-contain", imageClassName)}
     />
   );

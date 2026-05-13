@@ -14,23 +14,26 @@ import { buildProfileUpsertPayload, getProfileCompletion, normalizeProfileRecord
 import { SUPABASE_REQUEST_TIMEOUT_MS, withTimeoutFallback } from "@/lib/async";
 
 interface ProfileData {
-  name: string;
+  avatar_url: string;
+  first_name: string;
+  surname: string;
   email: string;
   phone: string;
   gender: string;
   position: string;
   id_passport: string;
-  license: string;
+  date_of_birth: string;
 }
 
 export default function EmployeeProfile() {
   const { user } = useAuth();
   const { toast } = useToast();
   const [profile, setProfile] = useState<ProfileData>({
-    name: "", email: "", phone: "", gender: "", position: "", id_passport: "", license: "",
+    avatar_url: "", first_name: "", surname: "", email: "", phone: "", gender: "", position: "", id_passport: "", date_of_birth: "",
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [uploadingImage, setUploadingImage] = useState(false);
 
   useEffect(() => {
     if (!user) {
@@ -53,14 +56,17 @@ export default function EmployeeProfile() {
           console.error("Failed to fetch profile:", error);
         }
         const normalized = normalizeProfileRecord((data as any[])?.[0], user);
+        const [first_name, ...surnameParts] = normalized.name.trim().split(/\s+/).filter(Boolean);
         setProfile({
-          name: normalized.name,
+          first_name: first_name || "",
+          surname: surnameParts.join(" "),
           email: normalized.email,
           phone: normalized.phone,
           gender: normalized.gender,
           position: normalized.position,
           id_passport: normalized.id_passport,
-          license: normalized.license,
+          date_of_birth: "",
+          avatar_url: normalized.avatar_url || "",
         });
       } catch (err) {
         console.error("Error fetching profile:", err);
@@ -70,42 +76,72 @@ export default function EmployeeProfile() {
     })();
   }, [user]);
 
-  const completionPercent = getProfileCompletion(profile);
+  const completionPercent = getProfileCompletion({
+    name: `${profile.first_name} ${profile.surname}`.trim(),
+    email: profile.email,
+    phone: profile.phone,
+    gender: profile.gender,
+    position: profile.position,
+    id_passport: profile.id_passport,
+  });
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user) return;
     setSaving(true);
     try {
+      const fullName = `${profile.first_name} ${profile.surname}`.trim();
       const payload = removeUndefined({
         ...buildProfileUpsertPayload(user, {
-          name: profile.name,
+          name: fullName,
           email: profile.email,
           phone: profile.phone,
           gender: profile.gender,
           position: profile.position,
           id_passport: profile.id_passport,
-          license: profile.license,
+          license: "",
+          avatar_url: profile.avatar_url || null,
           profile_completed: completionPercent === 100,
         }),
         status: "active",
       } as any);
       const savedRow = await saveProfileRecord(supabase, payload as any);
       const normalized = normalizeProfileRecord(savedRow as any, user);
+      const [first_name, ...surnameParts] = normalized.name.trim().split(/\s+/).filter(Boolean);
       setProfile({
-        name: normalized.name,
+        first_name: first_name || "",
+        surname: surnameParts.join(" "),
         email: normalized.email,
         phone: normalized.phone,
         gender: normalized.gender,
         position: normalized.position,
         id_passport: normalized.id_passport,
-        license: normalized.license,
+        date_of_birth: profile.date_of_birth,
+        avatar_url: normalized.avatar_url || "",
       });
       toast({ title: "Profile updated" });
     } catch (err: any) {
       toast({ title: "Error", description: err.message, variant: "destructive" });
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleAvatarUpload = async (file?: File) => {
+    if (!user || !file) return;
+    setUploadingImage(true);
+    try {
+      const ext = file.name.split(".").pop()?.toLowerCase() || "jpg";
+      const path = `${user.id}/avatars/employee-${Date.now()}.${ext}`;
+      const { error: uploadError } = await supabase.storage.from("profile-images").upload(path, file, { upsert: true });
+      if (uploadError) throw uploadError;
+      const { data } = supabase.storage.from("profile-images").getPublicUrl(path);
+      setProfile((prev) => ({ ...prev, avatar_url: data.publicUrl }));
+      toast({ title: "Image uploaded", description: "Click Save Changes to apply profile image." });
+    } catch (err: any) {
+      toast({ title: "Upload failed", description: err.message, variant: "destructive" });
+    } finally {
+      setUploadingImage(false);
     }
   };
 
@@ -133,8 +169,12 @@ export default function EmployeeProfile() {
           <form onSubmit={handleSave} className="space-y-4">
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
-                <Label>Full Name</Label>
-                <Input value={profile.name} onChange={(e) => setProfile({ ...profile, name: e.target.value })} required />
+                <Label>First Name</Label>
+                <Input value={profile.first_name} onChange={(e) => setProfile({ ...profile, first_name: e.target.value })} required />
+              </div>
+              <div className="space-y-2">
+                <Label>Surname</Label>
+                <Input value={profile.surname} onChange={(e) => setProfile({ ...profile, surname: e.target.value })} required />
               </div>
               <div className="space-y-2">
                 <Label>Email</Label>
@@ -164,9 +204,23 @@ export default function EmployeeProfile() {
                 <Label>Position</Label>
                 <Input value={profile.position} disabled className="bg-muted" />
               </div>
+              <div className="space-y-2">
+                <Label>Date of Birth</Label>
+                <Input type="date" value={profile.date_of_birth} onChange={(e) => setProfile({ ...profile, date_of_birth: e.target.value })} />
+              </div>
               <div className="space-y-2 sm:col-span-2">
-                <Label>License / Certification</Label>
-                <Input value={profile.license} onChange={(e) => setProfile({ ...profile, license: e.target.value })} placeholder="e.g. UK Driving License, CSCS Card" />
+                <Label>Profile Picture</Label>
+                <div className="flex items-center gap-3">
+                  {profile.avatar_url ? (
+                    <img src={profile.avatar_url} alt="Profile" className="h-12 w-12 rounded-full object-cover border" />
+                  ) : (
+                    <div className="h-12 w-12 rounded-full bg-primary/15 text-primary flex items-center justify-center text-sm font-semibold border">
+                      {(profile.first_name || "E").trim().charAt(0).toUpperCase()}
+                    </div>
+                  )}
+                  <Input type="file" accept="image/*" disabled={uploadingImage} onChange={(e) => handleAvatarUpload(e.target.files?.[0])} />
+                </div>
+                {uploadingImage && <p className="text-xs text-muted-foreground flex items-center gap-1"><Loader2 className="h-3 w-3 animate-spin" /> Uploading image...</p>}
               </div>
             </div>
             <Button type="submit" disabled={saving}>

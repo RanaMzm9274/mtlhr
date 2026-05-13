@@ -6,9 +6,7 @@ const corsHeaders = {
 }
 
 Deno.serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders })
-  }
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
 
   try {
     const authHeader = req.headers.get('Authorization')
@@ -19,22 +17,21 @@ Deno.serve(async (req) => {
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!
     const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 
-    // Verify the caller is an admin
-    const userClient = createClient(supabaseUrl, Deno.env.get('SUPABASE_ANON_KEY')!, {
-      global: { headers: { Authorization: authHeader } },
-    })
+    const userClient = createClient(supabaseUrl, Deno.env.get('SUPABASE_ANON_KEY')!, { global: { headers: { Authorization: authHeader } } })
     const { data: { user: caller } } = await userClient.auth.getUser()
     if (!caller) {
       return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
     }
 
     const adminClient = createClient(supabaseUrl, serviceRoleKey)
-    const { data: roleRows, error: roleError } = await adminClient.from('user_roles').select('role').eq('user_id', caller.id)
-    if (roleError) {
-      return new Response(JSON.stringify({ error: roleError.message }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
-    }
+    const [{ data: roleRows }, { data: membership }] = await Promise.all([
+      adminClient.from('user_roles').select('role').eq('user_id', caller.id),
+      adminClient.from('company_memberships').select('company_id,status').eq('user_id', caller.id).order('created_at', { ascending: false }).limit(1).maybeSingle(),
+    ])
 
-    if (!(roleRows ?? []).some((role) => role.role === 'admin')) {
+    const isSuperAdmin = (roleRows ?? []).some((role) => role.role === 'super_admin')
+    const isAdmin = (roleRows ?? []).some((role) => role.role === 'admin')
+    if (!isSuperAdmin && (!isAdmin || membership?.status !== 'approved')) {
       return new Response(JSON.stringify({ error: 'Forbidden' }), { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
     }
 
@@ -46,51 +43,38 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify({ error: 'user_id, profile_id or email required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
     }
 
-    // Prevent deleting yourself
     if (user_id && user_id === caller.id) {
       return new Response(JSON.stringify({ error: 'Cannot delete yourself' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
     }
 
-    // Full account delete path when we have auth user id.
+    let targetCompanyId: string | null = null
     if (user_id) {
-      const { error: docsError } = await adminClient.from('documents').delete().eq('user_id', user_id)
-      if (docsError) {
-        return new Response(JSON.stringify({ error: `Documents delete failed: ${docsError.message}` }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
-      }
+      const { data: targetMembership } = await adminClient
+        .from('company_memberships')
+        .select('company_id')
+        .eq('user_id', user_id)
+        .maybeSingle()
+      targetCompanyId = targetMembership?.company_id ?? null
+    }
 
-      const { error: leaveError } = await adminClient.from('leave_requests').delete().eq('user_id', user_id)
-      if (leaveError) {
-        return new Response(JSON.stringify({ error: `Leave requests delete failed: ${leaveError.message}` }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
-      }
+    if (!isSuperAdmin && targetCompanyId && targetCompanyId !== membership?.company_id) {
+      return new Response(JSON.stringify({ error: 'You can only delete users in your company.' }), { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+    }
 
-      const { error: profileError } = await adminClient.from('employee_profiles').delete().eq('user_id', user_id)
-      if (profileError) {
-        return new Response(JSON.stringify({ error: `Profile delete failed: ${profileError.message}` }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
-      }
-
-      const { error: roleDeleteError } = await adminClient.from('user_roles').delete().eq('user_id', user_id)
-      if (roleDeleteError) {
-        return new Response(JSON.stringify({ error: `Role delete failed: ${roleDeleteError.message}` }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
-      }
-
+    if (user_id) {
+      await adminClient.from('documents').delete().eq('user_id', user_id)
+      await adminClient.from('leave_requests').delete().eq('user_id', user_id)
+      await adminClient.from('employee_profiles').delete().eq('user_id', user_id)
+      await adminClient.from('company_memberships').delete().eq('user_id', user_id)
+      await adminClient.from('user_roles').delete().eq('user_id', user_id)
       const { error: authError } = await adminClient.auth.admin.deleteUser(user_id)
       if (authError) {
-        console.error('Auth delete error:', authError)
         return new Response(JSON.stringify({ error: authError.message }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
       }
-    } else {
-      // Invited profile cleanup path when there is no auth user id.
-      if (profile_id) {
-        const { error: profileDeleteError } = await adminClient.from('employee_profiles').delete().eq('id', profile_id)
-        if (profileDeleteError) {
-          return new Response(JSON.stringify({ error: `Profile delete failed: ${profileDeleteError.message}` }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
-        }
-      } else if (email) {
-        const { error: profileDeleteError } = await adminClient.from('employee_profiles').delete().ilike('email', email)
-        if (profileDeleteError) {
-          return new Response(JSON.stringify({ error: `Profile delete failed: ${profileDeleteError.message}` }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
-        }
-      }
+    } else if (profile_id) {
+      await adminClient.from('employee_profiles').delete().eq('id', profile_id)
+    } else if (email) {
+      await adminClient.from('employee_profiles').delete().ilike('email', email)
     }
 
     return new Response(JSON.stringify({ success: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })

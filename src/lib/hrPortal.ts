@@ -7,6 +7,8 @@ type AnyRecord = Record<string, any> | null | undefined;
 export interface ProfileRecord {
   id?: string;
   user_id?: string;
+  company_id?: string | null;
+  avatar_url?: string | null;
   name: string;
   email: string;
   phone: string;
@@ -96,6 +98,8 @@ export const normalizeProfileRecord = (row: AnyRecord, user?: Pick<User, "email"
   const profile: ProfileRecord = {
     id: typeof row?.id === "string" ? row.id : undefined,
     user_id: typeof row?.user_id === "string" ? row.user_id : undefined,
+    company_id: typeof row?.company_id === "string" ? row.company_id : null,
+    avatar_url: firstNullableString(row?.avatar_url),
     name: firstString(row?.name, meta.name, meta.full_name),
     email: firstString(row?.email, user?.email),
     phone: firstString(row?.phone),
@@ -168,7 +172,7 @@ export const buildLeaveInsertPayload = (userId: string, leave: Pick<LeaveRecord,
 
 export const buildProfileUpsertPayload = (
   user: Pick<User, "id" | "email">,
-  profile: Pick<ProfileRecord, "name" | "email" | "phone" | "gender" | "position" | "id_passport" | "license" | "profile_completed">,
+  profile: Pick<ProfileRecord, "name" | "email" | "phone" | "gender" | "position" | "id_passport" | "license" | "profile_completed"> & { avatar_url?: string | null },
 ) => ({
   user_id: user.id,
   name: profile.name,
@@ -178,6 +182,7 @@ export const buildProfileUpsertPayload = (
   position: profile.position,
   id_passport: profile.id_passport,
   license: profile.license,
+  avatar_url: profile.avatar_url ?? null,
   profile_completed: profile.profile_completed,
 });
 

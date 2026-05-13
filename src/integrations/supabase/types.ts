@@ -17,6 +17,7 @@ export type Database = {
       documents: {
         Row: {
           category: string
+          company_id: string | null
           file_name: string
           file_type: string
           file_url: string
@@ -26,6 +27,7 @@ export type Database = {
         }
         Insert: {
           category: string
+          company_id?: string | null
           file_name?: string
           file_type?: string
           file_url: string
@@ -35,6 +37,7 @@ export type Database = {
         }
         Update: {
           category?: string
+          company_id?: string | null
           file_name?: string
           file_type?: string
           file_url?: string
@@ -47,6 +50,8 @@ export type Database = {
       employee_profiles: {
         Row: {
           address: string | null
+          avatar_url: string | null
+          company_id: string | null
           created_at: string
           email: string
           gender: string | null
@@ -63,6 +68,8 @@ export type Database = {
         }
         Insert: {
           address?: string | null
+          avatar_url?: string | null
+          company_id?: string | null
           created_at?: string
           email?: string
           gender?: string | null
@@ -79,6 +86,8 @@ export type Database = {
         }
         Update: {
           address?: string | null
+          avatar_url?: string | null
+          company_id?: string | null
           created_at?: string
           email?: string
           gender?: string | null
@@ -97,6 +106,7 @@ export type Database = {
       }
       invitations: {
         Row: {
+          company_id: string | null
           created_at: string
           email: string
           expires_at: string
@@ -107,6 +117,7 @@ export type Database = {
           used: boolean | null
         }
         Insert: {
+          company_id?: string | null
           created_at?: string
           email: string
           expires_at: string
@@ -117,6 +128,7 @@ export type Database = {
           used?: boolean | null
         }
         Update: {
+          company_id?: string | null
           created_at?: string
           email?: string
           expires_at?: string
@@ -131,6 +143,7 @@ export type Database = {
       leave_requests: {
         Row: {
           admin_comment: string | null
+          company_id: string | null
           created_at: string
           end_date: string
           id: string
@@ -143,6 +156,7 @@ export type Database = {
         }
         Insert: {
           admin_comment?: string | null
+          company_id?: string | null
           created_at?: string
           end_date: string
           id?: string
@@ -155,6 +169,7 @@ export type Database = {
         }
         Update: {
           admin_comment?: string | null
+          company_id?: string | null
           created_at?: string
           end_date?: string
           id?: string
@@ -164,6 +179,132 @@ export type Database = {
           status?: string
           updated_at?: string
           user_id?: string
+        }
+        Relationships: []
+      }
+      companies: {
+        Row: {
+          approved_at: string | null
+          approved_by: string | null
+          bio: string | null
+          created_at: string
+          created_by: string | null
+          employee_count: number | null
+          id: string
+          logo_url: string | null
+          name: string
+          revenue: number | null
+          workday_end: string | null
+          workday_start: string | null
+          slug: string
+          status: Database["public"]["Enums"]["company_status"]
+          updated_at: string
+        }
+        Insert: {
+          approved_at?: string | null
+          approved_by?: string | null
+          bio?: string | null
+          created_at?: string
+          created_by?: string | null
+          employee_count?: number | null
+          id?: string
+          logo_url?: string | null
+          name: string
+          revenue?: number | null
+          workday_end?: string | null
+          workday_start?: string | null
+          slug: string
+          status?: Database["public"]["Enums"]["company_status"]
+          updated_at?: string
+        }
+        Update: {
+          approved_at?: string | null
+          approved_by?: string | null
+          bio?: string | null
+          created_at?: string
+          created_by?: string | null
+          employee_count?: number | null
+          id?: string
+          logo_url?: string | null
+          name?: string
+          revenue?: number | null
+          workday_end?: string | null
+          workday_start?: string | null
+          slug?: string
+          status?: Database["public"]["Enums"]["company_status"]
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      company_memberships: {
+        Row: {
+          approved_at: string | null
+          approved_by: string | null
+          company_id: string
+          created_at: string
+          id: string
+          status: Database["public"]["Enums"]["company_status"]
+          user_id: string
+        }
+        Insert: {
+          approved_at?: string | null
+          approved_by?: string | null
+          company_id: string
+          created_at?: string
+          id?: string
+          status?: Database["public"]["Enums"]["company_status"]
+          user_id: string
+        }
+        Update: {
+          approved_at?: string | null
+          approved_by?: string | null
+          company_id?: string
+          created_at?: string
+          id?: string
+          status?: Database["public"]["Enums"]["company_status"]
+          user_id?: string
+        }
+        Relationships: []
+      }
+      attendance_entries: {
+        Row: {
+          check_in_at: string | null
+          check_out_at: string | null
+          company_id: string
+          created_at: string
+          id: string
+          scheduled_end: string | null
+          scheduled_start: string | null
+          updated_at: string
+          updated_by: string | null
+          user_id: string
+          work_date: string
+        }
+        Insert: {
+          check_in_at?: string | null
+          check_out_at?: string | null
+          company_id: string
+          created_at?: string
+          id?: string
+          scheduled_end?: string | null
+          scheduled_start?: string | null
+          updated_at?: string
+          updated_by?: string | null
+          user_id: string
+          work_date: string
+        }
+        Update: {
+          check_in_at?: string | null
+          check_out_at?: string | null
+          company_id?: string
+          created_at?: string
+          id?: string
+          scheduled_end?: string | null
+          scheduled_start?: string | null
+          updated_at?: string
+          updated_by?: string | null
+          user_id?: string
+          work_date?: string
         }
         Relationships: []
       }
@@ -199,7 +340,8 @@ export type Database = {
       }
     }
     Enums: {
-      app_role: "admin" | "employee"
+      app_role: "super_admin" | "admin" | "employee"
+      company_status: "pending" | "approved" | "rejected"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -327,7 +469,9 @@ export type CompositeTypes<
 export const Constants = {
   public: {
     Enums: {
-      app_role: ["admin", "employee"],
+      app_role: ["super_admin", "admin", "employee"],
+      company_status: ["pending", "approved", "rejected"],
     },
   },
 } as const
+

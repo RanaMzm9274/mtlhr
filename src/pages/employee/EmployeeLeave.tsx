@@ -24,7 +24,7 @@ import {
 } from "@/components/ui/table";
 import { Plus, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { buildLeaveInsertPayload, normalizeLeaveRecord } from "@/lib/hrPortal";
+import { buildDocumentInsertPayload, buildLeaveInsertPayload, normalizeLeaveRecord } from "@/lib/hrPortal";
 import { SUPABASE_REQUEST_TIMEOUT_MS, withTimeout, withTimeoutFallback } from "@/lib/async";
 
 interface LeaveRequest {
@@ -45,6 +45,7 @@ export default function EmployeeLeave() {
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [attachment, setAttachment] = useState<File | null>(null);
   const [form, setForm] = useState({
     leave_type: "annual",
     start_date: "",
@@ -83,7 +84,36 @@ export default function EmployeeLeave() {
     }
 
     setSubmitting(true);
+    let uploadedPath: string | null = null;
     try {
+      if (attachment) {
+        const allowedTypes = ["application/pdf", "image/jpeg", "image/png"];
+        if (!allowedTypes.includes(attachment.type)) {
+          throw new Error("Invalid attachment type. Only PDF, JPG, PNG allowed.");
+        }
+        if (attachment.size > 5 * 1024 * 1024) {
+          throw new Error("Attachment too large. Max 5MB.");
+        }
+
+        const ext = attachment.name.split(".").pop()?.toLowerCase() || "pdf";
+        const path = `${user.id}/leave-${crypto.randomUUID()}.${ext}`;
+        const { error: uploadError } = await withTimeout(
+          supabase.storage.from("documents").upload(path, attachment),
+          SUPABASE_REQUEST_TIMEOUT_MS,
+          "Leave attachment upload",
+        );
+        if (uploadError) throw uploadError;
+        uploadedPath = path;
+
+        const docPayload = buildDocumentInsertPayload(user.id, path, attachment, "certificate");
+        const { error: docError } = await withTimeout(
+          supabase.from("documents").insert(docPayload as any),
+          SUPABASE_REQUEST_TIMEOUT_MS,
+          "Leave attachment save",
+        );
+        if (docError) throw docError;
+      }
+
       const payload = buildLeaveInsertPayload(user.id, form);
       const { error } = await withTimeout(
         supabase.from("leave_requests").insert(payload as any),
@@ -94,8 +124,16 @@ export default function EmployeeLeave() {
       toast({ title: "Leave request submitted" });
       setDialogOpen(false);
       setForm({ leave_type: "annual", start_date: "", end_date: "", reason: "" });
+      setAttachment(null);
       fetchLeaves();
     } catch (err: any) {
+      if (uploadedPath) {
+        await withTimeout(
+          supabase.storage.from("documents").remove([uploadedPath]),
+          SUPABASE_REQUEST_TIMEOUT_MS,
+          "Leave attachment rollback",
+        ).catch(() => undefined);
+      }
       toast({ title: "Error", description: err.message, variant: "destructive" });
     } finally {
       setSubmitting(false);
@@ -155,6 +193,15 @@ export default function EmployeeLeave() {
                 <Label>Reason</Label>
                 <Textarea value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} required placeholder="Briefly describe the reason..." />
               </div>
+              <div className="space-y-2">
+                <Label>Supporting Document (Optional)</Label>
+                <Input
+                  type="file"
+                  accept=".pdf,.jpg,.jpeg,.png"
+                  onChange={(e) => setAttachment(e.target.files?.[0] ?? null)}
+                />
+                <p className="text-xs text-muted-foreground">Accepted: PDF, JPG, PNG (max 5MB)</p>
+              </div>
               <Button type="submit" className="w-full" disabled={submitting}>
                 {submitting && <Loader2 className="animate-spin mr-2" />} Submit Request
               </Button>
@@ -163,10 +210,10 @@ export default function EmployeeLeave() {
         </Dialog>
       </div>
 
-      <Card>
+      <Card className="wf-panel">
         <CardContent className="pt-6">
           <Table>
-            <TableHeader>
+            <TableHeader className="wf-table-head">
               <TableRow>
                 <TableHead>Type</TableHead>
                 <TableHead>From</TableHead>

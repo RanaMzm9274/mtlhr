@@ -32,8 +32,10 @@ import {
 } from "@/components/ui/table";
 import { UserPlus, Search, Loader2, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, Mail, Trash2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { filterEmployeeProfiles, normalizeProfileRecord, type ProfileRecord } from "@/lib/hrPortal";
+import { filterEmployeeProfiles, normalizeDocumentRecord, normalizeProfileRecord, type DocumentRecord, type ProfileRecord } from "@/lib/hrPortal";
 import { SUPABASE_REQUEST_TIMEOUT_MS, withTimeout, withTimeoutFallback } from "@/lib/async";
+import { Line, LineChart, CartesianGrid, XAxis, YAxis } from "recharts";
+import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
 
 interface Employee extends ProfileRecord {
   id?: string;
@@ -42,6 +44,7 @@ interface Employee extends ProfileRecord {
 
 type SortKey = "name" | "email" | "status" | "created_at" | "position";
 type SortDir = "asc" | "desc";
+type AttendanceRange = "daily" | "weekly" | "monthly";
 
 const PAGE_SIZE = 10;
 
@@ -63,6 +66,12 @@ export default function EmployeeList() {
   const [deleteStep, setDeleteStep] = useState<1 | 2>(1);
   const [deleteConfirmInput, setDeleteConfirmInput] = useState("");
   const [deleting, setDeleting] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
+  const [employeeDocs, setEmployeeDocs] = useState<DocumentRecord[]>([]);
+  const [attendanceRows, setAttendanceRows] = useState<Array<{ work_date: string; check_in_at: string | null; check_out_at: string | null }>>([]);
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [attendanceRange, setAttendanceRange] = useState<AttendanceRange>("monthly");
 
   const fetchEmployees = async () => {
     try {
@@ -130,7 +139,24 @@ export default function EmployeeList() {
         "Employee invitation",
       );
 
-      if (error) throw error;
+      if (error) {
+        let details = error.message;
+        const context = (error as any)?.context;
+        if (context) {
+          try {
+            const json = await context.json();
+            details = json?.error || json?.message || JSON.stringify(json);
+          } catch {
+            try {
+              const text = await context.text();
+              if (text) details = text;
+            } catch {
+              // no-op: keep original error message
+            }
+          }
+        }
+        throw new Error(details || error.message);
+      }
       if (data?.error) throw new Error(data.error);
 
       toast({
@@ -187,7 +213,10 @@ export default function EmployeeList() {
         "Employee deletion",
       );
 
-      if (error) throw error;
+      if (error) {
+        const details = (error as any)?.context?.json ? JSON.stringify((error as any).context.json) : error.message;
+        throw new Error(details || error.message);
+      }
       if (data?.fallback) throw new Error(data.error || "Employee deletion failed.");
       if (data?.error) throw new Error(data.error);
 
@@ -211,6 +240,96 @@ export default function EmployeeList() {
     setDeleteStep(1);
     setDeleteConfirmInput("");
   };
+
+  const loadEmployeeProfileData = async (employee: Employee, range: AttendanceRange = attendanceRange) => {
+    if (!employee.user_id) {
+      setSelectedEmployee(employee);
+      setEmployeeDocs([]);
+      setAttendanceRows([]);
+      return;
+    }
+
+    setProfileLoading(true);
+    setSelectedEmployee(employee);
+    try {
+      const toDate = new Date();
+      const fromDate = new Date();
+      if (range === "daily") fromDate.setDate(fromDate.getDate() - 1);
+      if (range === "weekly") fromDate.setDate(fromDate.getDate() - 6);
+      if (range === "monthly") fromDate.setDate(fromDate.getDate() - 29);
+      const from = fromDate.toISOString().slice(0, 10);
+      const to = toDate.toISOString().slice(0, 10);
+
+      const [{ data: docs, error: docsError }, { data: attendance, error: attendanceError }] = await withTimeoutFallback(
+        Promise.all([
+          supabase.from("documents").select("*").eq("user_id", employee.user_id).order("uploaded_at", { ascending: false }),
+          supabase
+            .from("attendance_entries")
+            .select("work_date,check_in_at,check_out_at")
+            .eq("user_id", employee.user_id)
+            .gte("work_date", from)
+            .lte("work_date", to)
+            .order("work_date", { ascending: true }),
+        ]),
+        [{ data: [], error: null }, { data: [], error: null }] as any,
+        SUPABASE_REQUEST_TIMEOUT_MS,
+      );
+
+      if (docsError) throw docsError;
+      if (attendanceError) throw attendanceError;
+
+      setEmployeeDocs(((docs as any[]) ?? []).map((doc) => normalizeDocumentRecord(doc)));
+      setAttendanceRows((attendance as Array<{ work_date: string; check_in_at: string | null; check_out_at: string | null }>) ?? []);
+    } catch (err: any) {
+      toast({ title: "Failed to load profile", description: err.message, variant: "destructive" });
+      setEmployeeDocs([]);
+      setAttendanceRows([]);
+    } finally {
+      setProfileLoading(false);
+    }
+  };
+
+  const downloadDocument = async (doc: DocumentRecord) => {
+    if (!doc.storage_path) {
+      toast({ title: "Download unavailable", description: "Storage path is missing for this file.", variant: "destructive" });
+      return;
+    }
+    const { data, error } = await withTimeout(
+      supabase.storage.from("documents").createSignedUrl(doc.storage_path, 60),
+      SUPABASE_REQUEST_TIMEOUT_MS,
+      "Document download",
+    );
+    if (error) {
+      toast({ title: "Download failed", description: error.message, variant: "destructive" });
+      return;
+    }
+    if (data?.signedUrl) window.open(data.signedUrl, "_blank");
+  };
+
+  const attendanceChartData = useMemo(() => {
+    const pointsCount = attendanceRange === "daily" ? 2 : attendanceRange === "weekly" ? 7 : 30;
+    const map = new Map(attendanceRows.map((row) => [row.work_date, row]));
+    const end = new Date();
+    const points: Array<{ date: string; hours: number }> = [];
+    for (let i = pointsCount - 1; i >= 0; i--) {
+      const d = new Date(end);
+      d.setDate(end.getDate() - i);
+      const dateKey = d.toISOString().slice(0, 10);
+      const row = map.get(dateKey);
+      let hours = 0;
+      if (row?.check_in_at && row?.check_out_at) {
+        const diff = new Date(row.check_out_at).getTime() - new Date(row.check_in_at).getTime();
+        if (diff > 0) hours = Number((diff / 3600000).toFixed(2));
+      }
+      points.push({ date: dateKey.slice(5), hours });
+    }
+    return points;
+  }, [attendanceRows, attendanceRange]);
+
+  useEffect(() => {
+    if (!profileOpen || !selectedEmployee) return;
+    loadEmployeeProfileData(selectedEmployee, attendanceRange);
+  }, [attendanceRange]);
 
   const processed = useMemo(() => {
     let list = [...employees];
@@ -252,7 +371,7 @@ export default function EmployeeList() {
   };
 
   return (
-    <div className="space-y-6 animate-fade-in">
+    <div className="space-y-8 animate-fade-in">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">Employees</h1>
@@ -294,7 +413,7 @@ export default function EmployeeList() {
         </Dialog>
       </div>
 
-      <Card>
+      <Card className="wf-panel">
         <CardHeader className="pb-3">
           <div className="flex flex-col sm:flex-row gap-3">
             <div className="relative flex-1">
@@ -311,7 +430,7 @@ export default function EmployeeList() {
             </div>
             <div className="flex gap-2">
               {(["all", "active", "inactive", "invited"] as const).map((value) => (
-                <Button key={value} variant={filter === value ? "default" : "outline"} size="sm" onClick={() => { setFilter(value); setPage(1); }} className="capitalize">
+                <Button key={value} variant="outline" size="sm" onClick={() => { setFilter(value); setPage(1); }} className={`capitalize ${filter === value ? "wf-filter-btn-active" : "wf-filter-btn"}`}>
                   {value}
                 </Button>
               ))}
@@ -320,7 +439,7 @@ export default function EmployeeList() {
         </CardHeader>
         <CardContent>
           <Table>
-            <TableHeader>
+            <TableHeader className="wf-table-head">
               <TableRow>
                 <TableHead className="cursor-pointer select-none" onClick={() => handleSort("name")}>Name <SortIcon col="name" /></TableHead>
                 <TableHead className="cursor-pointer select-none" onClick={() => handleSort("email")}>Email <SortIcon col="email" /></TableHead>
@@ -328,32 +447,57 @@ export default function EmployeeList() {
                 <TableHead>Phone</TableHead>
                 <TableHead className="cursor-pointer select-none" onClick={() => handleSort("status")}>Status <SortIcon col="status" /></TableHead>
                 <TableHead className="cursor-pointer select-none" onClick={() => handleSort("created_at")}>Joined <SortIcon col="created_at" /></TableHead>
+                <TableHead>View</TableHead>
                 <TableHead className="w-12"></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center py-8">
+                  <TableCell colSpan={8} className="text-center py-8">
                     <Loader2 className="animate-spin mx-auto" />
                   </TableCell>
                 </TableRow>
               ) : paged.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
+                  <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
                     No employees found
                   </TableCell>
                 </TableRow>
               ) : (
                 paged.map((employee) => (
-                  <TableRow key={employee.id ?? employee.user_id ?? employee.email}>
-                    <TableCell className="font-medium">{employee.name || "-"}</TableCell>
+                    <TableRow key={employee.id ?? employee.user_id ?? employee.email}>
+                    <TableCell className="font-medium">
+                      <div className="flex items-center gap-2">
+                        {employee.avatar_url ? (
+                          <img src={employee.avatar_url} alt={employee.name || employee.email} className="h-8 w-8 rounded-full object-cover border" />
+                        ) : (
+                          <div className="h-8 w-8 rounded-full bg-primary/15 text-primary flex items-center justify-center text-xs font-semibold border">
+                            {(employee.name || employee.email || "E").trim().charAt(0).toUpperCase()}
+                          </div>
+                        )}
+                        <span>{employee.name || "-"}</span>
+                      </div>
+                    </TableCell>
                     <TableCell>{employee.email || "-"}</TableCell>
                     <TableCell>{employee.position || "-"}</TableCell>
                     <TableCell>{employee.phone || "-"}</TableCell>
                     <TableCell>{statusBadge(employee.status)}</TableCell>
                     <TableCell className="text-muted-foreground">
                       {employee.created_at ? new Date(employee.created_at).toLocaleDateString() : "-"}
+                    </TableCell>
+                    <TableCell>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setProfileOpen(true);
+                          setAttendanceRange("monthly");
+                          loadEmployeeProfileData(employee);
+                        }}
+                      >
+                        View Profile
+                      </Button>
                     </TableCell>
                     <TableCell>
                       <Button
@@ -396,6 +540,98 @@ export default function EmployeeList() {
           )}
         </CardContent>
       </Card>
+
+      <Dialog open={profileOpen} onOpenChange={setProfileOpen}>
+        <DialogContent className="sm:max-w-6xl">
+          <DialogHeader>
+            <DialogTitle>Employee Profile</DialogTitle>
+            <DialogDescription>
+              Full employee details, attached documents, and recent attendance report.
+            </DialogDescription>
+          </DialogHeader>
+          {profileLoading ? (
+            <div className="py-10">
+              <Loader2 className="animate-spin mx-auto" />
+            </div>
+          ) : !selectedEmployee ? (
+            <p className="text-sm text-muted-foreground">No employee selected.</p>
+          ) : (
+            <div className="grid gap-6 lg:grid-cols-2">
+              <div className="space-y-4">
+                <Card>
+                  <CardContent className="pt-6">
+                    <div className="grid sm:grid-cols-2 gap-3 text-sm">
+                      <div><span className="text-muted-foreground">Name:</span> <span className="font-medium">{selectedEmployee.name || "-"}</span></div>
+                      <div><span className="text-muted-foreground">Email:</span> <span className="font-medium">{selectedEmployee.email || "-"}</span></div>
+                      <div><span className="text-muted-foreground">Phone:</span> <span>{selectedEmployee.phone || "-"}</span></div>
+                      <div><span className="text-muted-foreground">Position:</span> <span>{selectedEmployee.position || "-"}</span></div>
+                      <div><span className="text-muted-foreground">Gender:</span> <span className="capitalize">{selectedEmployee.gender || "-"}</span></div>
+                      <div><span className="text-muted-foreground">ID / Passport:</span> <span>{selectedEmployee.id_passport || "-"}</span></div>
+                      <div><span className="text-muted-foreground">Status:</span> <span className="capitalize">{selectedEmployee.status || "-"}</span></div>
+                      <div><span className="text-muted-foreground">Joined:</span> <span>{selectedEmployee.created_at ? new Date(selectedEmployee.created_at).toLocaleDateString() : "-"}</span></div>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardHeader>
+                    <p className="font-medium">Attached Documents</p>
+                  </CardHeader>
+                  <CardContent className="space-y-2">
+                    {employeeDocs.length === 0 ? (
+                      <p className="text-sm text-muted-foreground">No documents attached.</p>
+                    ) : (
+                      employeeDocs.map((doc) => (
+                        <div key={doc.id} className="flex items-center justify-between border rounded-md p-2">
+                          <div>
+                            <p className="text-sm font-medium">{doc.file_name || "Untitled"}</p>
+                            <p className="text-xs text-muted-foreground">{doc.category} · {new Date(doc.uploaded_at).toLocaleDateString()}</p>
+                          </div>
+                          <Button size="sm" variant="outline" onClick={() => downloadDocument(doc)}>View</Button>
+                        </div>
+                      ))
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
+
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="font-medium">
+                      Attendance Report ({attendanceRange === "daily" ? "Daily" : attendanceRange === "weekly" ? "Weekly" : "Monthly"})
+                    </p>
+                    <div className="flex gap-2">
+                      <Button size="sm" variant={attendanceRange === "daily" ? "default" : "outline"} onClick={() => setAttendanceRange("daily")}>Daily</Button>
+                      <Button size="sm" variant={attendanceRange === "weekly" ? "default" : "outline"} onClick={() => setAttendanceRange("weekly")}>Weekly</Button>
+                      <Button size="sm" variant={attendanceRange === "monthly" ? "default" : "outline"} onClick={() => setAttendanceRange("monthly")}>Monthly</Button>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <ChartContainer
+                    config={{
+                      hours: {
+                        label: "Hours",
+                        color: "hsl(var(--primary))",
+                      },
+                    }}
+                    className="h-[320px] w-full"
+                  >
+                    <LineChart data={attendanceChartData} margin={{ top: 10, right: 12, left: 0, bottom: 0 }}>
+                      <CartesianGrid vertical={false} />
+                      <XAxis dataKey="date" tickLine={false} axisLine={false} />
+                      <YAxis tickLine={false} axisLine={false} domain={[0, 12]} />
+                      <ChartTooltip content={<ChartTooltipContent />} />
+                      <Line dataKey="hours" type="monotone" stroke="var(--color-hours)" strokeWidth={2} dot={false} />
+                    </LineChart>
+                  </ChartContainer>
+                </CardContent>
+              </Card>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
 
       <AlertDialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) handleDeleteCancel(); }}>
         <AlertDialogContent>
@@ -444,3 +680,4 @@ export default function EmployeeList() {
     </div>
   );
 }
+
