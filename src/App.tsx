@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Route, Routes, Navigate, useParams } from "react-router-dom";
+import { BrowserRouter, Route, Routes, Navigate, useLocation, useParams } from "react-router-dom";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -60,6 +60,7 @@ function ProtectedRoute({ children, requiredRole }: { children: React.ReactNode;
 
 function AppRoutes() {
   const { user, role, loading, companyStatus, companySlug } = useAuth();
+  const location = useLocation();
 
   if (loading) {
     return (
@@ -76,6 +77,16 @@ function AppRoutes() {
       : companySlug ? `/${companySlug}/employee/dashboard` : "/login";
 
   const pendingBlocked = !!user && role === "admin" && (companyStatus === "pending" || companyStatus === "rejected");
+  const searchParams = new URLSearchParams(location.search);
+  const inviteType = searchParams.get("type");
+  const hasInviteQuery = (inviteType === "invite" || inviteType === "recovery") && (!!searchParams.get("token_hash") || !!searchParams.get("code"));
+  const hasInviteHash = location.hash.includes("access_token=") && (location.hash.includes("type=invite") || location.hash.includes("type=recovery"));
+  const hasInvitePayload = hasInviteQuery || hasInviteHash;
+  const setPasswordTarget = `/set-password${location.search || ""}${location.hash || ""}`;
+
+  if (hasInvitePayload && location.pathname !== "/set-password") {
+    return <Navigate to={setPasswordTarget} replace />;
+  }
 
   return (
     <Routes>

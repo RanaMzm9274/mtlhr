@@ -14,6 +14,39 @@ const InviteSchema = z.object({
   redirectTo: z.string().url().optional(),
 });
 
+function getAppOrigin(reqUrl: string): string {
+  const configuredOrigin = Deno.env.get("APP_ORIGIN")?.trim();
+  if (configuredOrigin) {
+    try {
+      return new URL(configuredOrigin).origin;
+    } catch {
+      // Ignore invalid APP_ORIGIN and fall back.
+    }
+  }
+
+  const requestOrigin = new URL(reqUrl).origin;
+  const fromRequest = requestOrigin.replace("/functions/v1", "");
+  return fromRequest;
+}
+
+function buildInviteRedirectTo(reqUrl: string, inputRedirectTo?: string): string {
+  const appOrigin = getAppOrigin(reqUrl);
+  const fallback = `${appOrigin}/set-password`;
+
+  if (!inputRedirectTo) return fallback;
+
+  try {
+    const parsed = new URL(inputRedirectTo);
+    const normalizedPath = parsed.pathname.replace(/\/+$/, "");
+    if (normalizedPath.endsWith("/set-password")) {
+      return `${parsed.origin}/set-password`;
+    }
+    return `${parsed.origin}/set-password`;
+  } catch {
+    return fallback;
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -102,15 +135,16 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify({ error: "company_id is required for super admin invitations." }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
+    const appOrigin = getAppOrigin(req.url);
+
     const inviterName =
       (authData.user.user_metadata?.name as string | undefined) ??
       (authData.user.user_metadata?.full_name as string | undefined) ??
       authData.user.email ??
       "Company Admin";
     const effectiveCompanyName = companyName ?? "Company";
-    const portalUrl = companySlug ? `${new URL(req.url).origin.replace("/functions/v1", "")}/${companySlug}/login` : `${new URL(req.url).origin.replace("/functions/v1", "")}/login`;
-
-    const redirectTo = parsed.data.redirectTo ?? `${new URL(req.url).origin.replace("/functions/v1", "")}/set-password`;
+    const portalUrl = companySlug ? `${appOrigin}/${companySlug}/login` : `${appOrigin}/login`;
+    const redirectTo = buildInviteRedirectTo(req.url, parsed.data.redirectTo);
     const { data: inviteData, error: inviteError } = await adminClient.auth.admin.inviteUserByEmail(parsed.data.email, {
       redirectTo,
       data: {
@@ -130,8 +164,15 @@ Deno.serve(async (req) => {
 
     const invitedUser = inviteData.user;
 
-    const { error: userRoleError } = await adminClient.from("user_roles").insert({ user_id: invitedUser.id, role: "employee" });
-    if (userRoleError && userRoleError.code !== "23505") {
+    // Enforce invited account access as employee so post-invite login routes to employee portal.
+    await adminClient
+      .from("user_roles")
+      .delete()
+      .eq("user_id", invitedUser.id)
+      .in("role", ["admin", "super_admin"]);
+
+    const { error: userRoleError } = await adminClient.from("user_roles").upsert({ user_id: invitedUser.id, role: "employee" }, { onConflict: "user_id,role" });
+    if (userRoleError) {
       return new Response(
         JSON.stringify({ error: userRoleError.message || "Failed to assign employee role." }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },

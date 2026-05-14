@@ -30,6 +30,9 @@ interface AttendanceRow {
   scheduled_end: string | null;
   check_in_at: string | null;
   check_out_at: string | null;
+  break_minutes: number | null;
+  break_started_at: string | null;
+  break_selected_minutes: number | null;
 }
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -69,7 +72,7 @@ export default function AdminAttendance() {
     if (!companyId) return;
     const [{ data: empRows }, { data: attRows }] = await Promise.all([
       supabase.from("employee_profiles").select("user_id,name,email").eq("company_id", companyId).order("name", { ascending: true }),
-      supabase.from("attendance_entries").select("id,user_id,work_date,scheduled_start,scheduled_end,check_in_at,check_out_at").eq("company_id", companyId).eq("work_date", date),
+      supabase.from("attendance_entries").select("id,user_id,work_date,scheduled_start,scheduled_end,check_in_at,check_out_at,break_minutes,break_started_at,break_selected_minutes").eq("company_id", companyId).eq("work_date", date),
     ]);
 
     setEmployees((empRows as EmployeeRow[]) ?? []);
@@ -103,6 +106,9 @@ export default function AdminAttendance() {
       scheduled_end: patch.scheduled_end ?? existing?.scheduled_end ?? null,
       check_in_at: patch.check_in_at ?? existing?.check_in_at ?? null,
       check_out_at: patch.check_out_at ?? existing?.check_out_at ?? null,
+      break_minutes: existing?.break_minutes ?? 0,
+      break_started_at: existing?.break_started_at ?? null,
+      break_selected_minutes: existing?.break_selected_minutes ?? null,
       updated_by: (await supabase.auth.getUser()).data.user?.id ?? null,
     };
 
@@ -221,7 +227,7 @@ export default function AdminAttendance() {
     setReportLoading(true);
     const { data, error } = await supabase
       .from("attendance_entries")
-      .select("id,user_id,work_date,scheduled_start,scheduled_end,check_in_at,check_out_at")
+      .select("id,user_id,work_date,scheduled_start,scheduled_end,check_in_at,check_out_at,break_minutes,break_started_at,break_selected_minutes")
       .eq("company_id", companyId)
       .eq("user_id", reportEmployeeId)
       .gte("work_date", range.from)
@@ -373,12 +379,13 @@ export default function AdminAttendance() {
             <Button onClick={fetchReport} disabled={reportLoading}>{reportLoading ? "Loading..." : "Refresh Report"}</Button>
           </div>
 
-          <div className="grid md:grid-cols-5 gap-2 text-sm">
+            <div className="grid md:grid-cols-6 gap-2 text-sm">
             <div className="border rounded-md p-3">Total Days: <span className="font-semibold">{reportSummary.totalDays}</span></div>
             <div className="border rounded-md p-3">Present: <span className="font-semibold">{reportSummary.presentDays}</span></div>
             <div className="border rounded-md p-3">Absent: <span className="font-semibold">{reportSummary.absentDays}</span></div>
             <div className="border rounded-md p-3">Completed: <span className="font-semibold">{reportSummary.completeDays}</span></div>
-            <div className="border rounded-md p-3">Hours: <span className="font-semibold">{reportSummary.totalHours}</span></div>
+              <div className="border rounded-md p-3">Hours: <span className="font-semibold">{reportSummary.totalHours}</span></div>
+              <div className="border rounded-md p-3">Break (min): <span className="font-semibold">{reportRows.reduce((s, r) => s + (r.break_minutes ?? 0), 0)}</span></div>
           </div>
 
           <div className="grid gap-4 lg:grid-cols-2">
@@ -389,6 +396,7 @@ export default function AdminAttendance() {
                     <th className="text-left p-2">Date</th>
                     <th className="text-left p-2">Check-in</th>
                     <th className="text-left p-2">Check-out</th>
+                    <th className="text-left p-2">Break</th>
                     <th className="text-left p-2">Status</th>
                   </tr>
                 </thead>
@@ -398,12 +406,16 @@ export default function AdminAttendance() {
                       <td className="p-2">{new Date(row.work_date).toLocaleDateString()}</td>
                       <td className="p-2">{row.check_in_at ? new Date(row.check_in_at).toLocaleString() : "-"}</td>
                       <td className="p-2">{row.check_out_at ? new Date(row.check_out_at).toLocaleString() : "-"}</td>
+                      <td className="p-2">
+                        {(row.break_minutes ?? 0) > 0 ? `${row.break_minutes} min` : "-"}
+                        {row.break_started_at ? ` (Active ${row.break_selected_minutes ?? 0}m)` : ""}
+                      </td>
                       <td className="p-2">{row.check_in_at || row.check_out_at ? "Present" : "Absent"}</td>
                     </tr>
                   ))}
                   {reportRows.length === 0 && (
                     <tr>
-                      <td className="p-3 text-muted-foreground" colSpan={4}>No attendance found for selected range.</td>
+                      <td className="p-3 text-muted-foreground" colSpan={5}>No attendance found for selected range.</td>
                     </tr>
                   )}
                 </tbody>

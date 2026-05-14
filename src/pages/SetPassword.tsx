@@ -1,10 +1,8 @@
 import { useEffect, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
-import { User } from "@supabase/supabase-js";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { EmailOtpType, User } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
@@ -44,12 +42,18 @@ export default function SetPassword() {
   const [validating, setValidating] = useState(true);
   const [invitation, setInvitation] = useState<InvitationState | null>(null);
   const token = searchParams.get("token");
+  const inviteType = searchParams.get("type");
+  const tokenHash = searchParams.get("token_hash");
+  const authCode = searchParams.get("code");
   const companyInitials = (invitation?.companyName || "Company")
     .split(" ")
     .filter(Boolean)
     .slice(0, 2)
     .map((part) => part[0]?.toUpperCase() ?? "")
     .join("");
+  const hasLength = password.length >= 8;
+  const hasSymbol = /[!@#$%^&*(),.?":{}|<>]/.test(password);
+  const hasMatch = password.length > 0 && password === confirmPassword;
 
   const resolveCompanyById = async (companyId: string) => {
     const { data: companyRow } = await withTimeout(
@@ -155,6 +159,33 @@ export default function SetPassword() {
         return;
       }
 
+      if ((inviteType === "invite" || inviteType === "recovery") && (tokenHash || authCode)) {
+        await withTimeout(
+          supabase.auth.signOut({ scope: "local" }),
+          SUPABASE_REQUEST_TIMEOUT_MS,
+          "Clear existing session before invite auth",
+        );
+
+        if (authCode) {
+          const { error } = await withTimeout(
+            supabase.auth.exchangeCodeForSession(authCode),
+            SUPABASE_REQUEST_TIMEOUT_MS,
+            "Invitation code exchange",
+          );
+          if (error) throw error;
+        } else if (tokenHash) {
+          const { error } = await withTimeout(
+            supabase.auth.verifyOtp({
+              token_hash: tokenHash,
+              type: inviteType as EmailOtpType,
+            }),
+            SUPABASE_REQUEST_TIMEOUT_MS,
+            "Invitation token verification",
+          );
+          if (error) throw error;
+        }
+      }
+
       const { data: { session } } = await withTimeout(
         supabase.auth.getSession(),
         SUPABASE_REQUEST_TIMEOUT_MS,
@@ -178,13 +209,15 @@ export default function SetPassword() {
       }
     });
 
-    validateInvite();
+    validateInvite().catch(() => {
+      if (mounted) setValidating(false);
+    });
 
     return () => {
       mounted = false;
       subscription.unsubscribe();
     };
-  }, [token]);
+  }, [token, tokenHash, authCode, inviteType]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -195,8 +228,8 @@ export default function SetPassword() {
       return;
     }
 
-    if (password.length < 8) {
-      toast({ title: "Password must be at least 8 characters", variant: "destructive" });
+    if (!hasLength || !hasSymbol) {
+      toast({ title: "Password must be at least 8 characters and include one special character", variant: "destructive" });
       return;
     }
 
@@ -338,56 +371,79 @@ export default function SetPassword() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background p-4">
-      <Card className="w-full max-w-md animate-fade-in">
-        <CardHeader className="text-center space-y-4">
+    <div className="min-h-screen flex items-center justify-center bg-white p-4">
+      <Card className="w-full max-w-[420px] border-0 shadow-none animate-fade-in">
+        <CardHeader className="text-center space-y-4 px-5 pt-8">
           {invitation.companyLogoUrl ? (
-            <AppLogo className="items-center" imageClassName="max-w-[280px]" src={invitation.companyLogoUrl} alt={invitation.companyName || "Company"} />
+            <AppLogo className="items-center mb-4" imageClassName="max-w-[240px]" src={invitation.companyLogoUrl} alt={invitation.companyName || "Company"} />
           ) : (
-            <div className="mx-auto h-16 w-16 rounded-full border bg-primary/10 text-primary flex items-center justify-center text-lg font-semibold">
+            <div className="mx-auto h-16 w-16 rounded-full border bg-primary/10 text-primary flex items-center justify-center text-lg font-semibold mb-4">
               {companyInitials || "C"}
             </div>
           )}
           <div>
-            <CardTitle className="text-2xl font-bold">Set Your Password</CardTitle>
-            <CardDescription>
-              Welcome to the {invitation.companyName || "Company"} HR Portal
-              {invitation.name && <span className="block mt-1 font-medium text-foreground">{invitation.name}</span>}
-              <span className="block text-xs mt-1">{invitation.email}</span>
-              {invitation.position && <span className="block text-xs mt-1">{invitation.position}</span>}
+            <CardTitle className="text-[28px] leading-tight font-medium text-black">Set new password</CardTitle>
+            <CardDescription className="text-base text-[#666] mt-2">
+              Your new password must be different from previous ones.
             </CardDescription>
+            <div className="text-xs mt-3 text-[#666]">
+              <span className="block">{invitation.email}</span>
+              {invitation.position && <span className="block mt-1">{invitation.position}</span>}
+            </div>
           </div>
         </CardHeader>
-        <CardContent>
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="password">Password</Label>
-              <Input
+        <CardContent className="px-5 pb-8">
+          <form onSubmit={handleSubmit} className="space-y-5">
+            <div className="space-y-2 text-left">
+              <label htmlFor="password" className="block text-sm font-medium">New Password</label>
+              <input
                 id="password"
                 type="password"
-                placeholder="Min 8 characters"
+                placeholder="••••••••"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
                 minLength={8}
+                className="w-full rounded-xl border border-[#e0e0e0] px-4 py-3.5 text-base outline-none transition focus:border-[#409fff] focus:shadow-[0_0_0_4px_rgba(64,159,255,0.1)]"
               />
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="confirmPassword">Confirm Password</Label>
-              <Input
+            <div className="space-y-2 text-left">
+              <label htmlFor="confirmPassword" className="block text-sm font-medium">Confirm Password</label>
+              <input
                 id="confirmPassword"
                 type="password"
-                placeholder="Confirm your password"
+                placeholder="••••••••"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 required
+                className="w-full rounded-xl border border-[#e0e0e0] px-4 py-3.5 text-base outline-none transition focus:border-[#409fff] focus:shadow-[0_0_0_4px_rgba(64,159,255,0.1)]"
               />
             </div>
-            <Button type="submit" className="w-full" disabled={loading}>
+
+            <div className="rounded-xl bg-[#f9fafb] p-5 text-left">
+              <h3 className="text-[13px] uppercase tracking-[0.05em] text-[#666] mb-3">Password Requirements</h3>
+              <div className={`flex items-center gap-2.5 text-sm mb-2 ${hasLength ? "text-emerald-500" : "text-[#666]"}`}>
+                <span className={`h-1.5 w-1.5 rounded-full ${hasLength ? "bg-emerald-500" : "bg-[#e0e0e0]"}`} />
+                At least 8 characters
+              </div>
+              <div className={`flex items-center gap-2.5 text-sm mb-2 ${hasSymbol ? "text-emerald-500" : "text-[#666]"}`}>
+                <span className={`h-1.5 w-1.5 rounded-full ${hasSymbol ? "bg-emerald-500" : "bg-[#e0e0e0]"}`} />
+                At least one special character
+              </div>
+              <div className={`flex items-center gap-2.5 text-sm ${hasMatch ? "text-emerald-500" : "text-[#666]"}`}>
+                <span className={`h-1.5 w-1.5 rounded-full ${hasMatch ? "bg-emerald-500" : "bg-[#e0e0e0]"}`} />
+                Passwords must match
+              </div>
+            </div>
+
+            <Button type="submit" className="w-full rounded-xl py-6 text-base font-medium bg-black text-white hover:opacity-85" disabled={loading}>
               {loading && <Loader2 className="animate-spin" />}
-              {invitation.mode === "auth-invite" ? "Activate Account" : "Create Account"}
+              {invitation.mode === "auth-invite" ? "Update Password" : "Create Account"}
             </Button>
           </form>
+          <Link to="/login" className="inline-block mt-6 text-sm text-[#666] hover:text-black hover:underline">
+            Back to sign in
+          </Link>
         </CardContent>
       </Card>
     </div>

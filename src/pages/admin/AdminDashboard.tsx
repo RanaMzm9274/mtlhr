@@ -9,6 +9,7 @@ export default function AdminDashboard() {
   const [stats, setStats] = useState({ total: 0, active: 0, inactive: 0, pendingLeaves: 0 });
   const [recentLeaves, setRecentLeaves] = useState<Array<LeaveRecord & { employee: ProfileRecord | null }>>([]);
   const [upcomingDeadlines, setUpcomingDeadlines] = useState<Array<LeaveRecord & { employee: ProfileRecord | null }>>([]);
+  const [teamStatus, setTeamStatus] = useState<Array<{ name: string; status: "in_shift" | "checked_out" | "not_checked_in" | "on_break" }>>([]);
 
   useEffect(() => {
     const fetchStats = async () => {
@@ -33,6 +34,27 @@ export default function AdminDashboard() {
 
         const normalizedProfiles = ((profiles as any[]) ?? []).map((profile) => normalizeProfileRecord(profile));
         const employeeProfiles = filterEmployeeProfiles(normalizedProfiles, roleRows ?? []);
+        const todayDateKey = new Date().toISOString().slice(0, 10);
+        const { data: attendanceToday } = await supabase
+          .from("attendance_entries")
+          .select("user_id,check_in_at,check_out_at,break_started_at")
+          .eq("work_date", todayDateKey);
+
+        const attendanceByUser = new Map((attendanceToday ?? []).map((row: any) => [row.user_id, row]));
+        setTeamStatus(
+          employeeProfiles.slice(0, 8).map((employee) => {
+            const row: any = employee.user_id ? attendanceByUser.get(employee.user_id) : null;
+            const status: "in_shift" | "checked_out" | "not_checked_in" | "on_break" = row?.check_in_at
+              ? row?.check_out_at
+                ? "checked_out"
+                : row?.break_started_at
+                  ? "on_break"
+                  : "in_shift"
+              : "not_checked_in";
+            return { name: employee.name || employee.email || "Employee", status };
+          }),
+        );
+
         const normalizedLeaves = ((leaves as any[]) ?? []).map((leave) => normalizeLeaveRecord(leave));
         const profileByUserId = new Map(employeeProfiles.filter((p) => !!p.user_id).map((p) => [p.user_id as string, p]));
         const leavesWithEmployees = normalizedLeaves.map((leave) => ({
@@ -192,6 +214,27 @@ export default function AdminDashboard() {
                     </div>
                   </div>
                 )})}
+              </div>
+            </div>
+
+            <div className="pt-4 border-t border-slate-100">
+              <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">Team Status</h3>
+              <div className="flex flex-wrap gap-4">
+                {teamStatus.length === 0 ? (
+                  <p className="text-sm text-slate-500">No employee status available.</p>
+                ) : teamStatus.map((member) => (
+                  <div key={member.name} className="text-center">
+                    <div className="relative">
+                      <div className="h-10 w-10 rounded-full bg-slate-100 border flex items-center justify-center text-xs font-bold text-slate-700">
+                        {member.name.charAt(0).toUpperCase()}
+                      </div>
+                      <div className={`absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-white ${
+                        member.status === "in_shift" ? "bg-emerald-500" : member.status === "checked_out" ? "bg-amber-400" : member.status === "on_break" ? "bg-blue-500" : "bg-slate-300"
+                      }`} />
+                    </div>
+                    <p className="text-[11px] mt-1 text-slate-500 max-w-16 truncate">{member.name}</p>
+                  </div>
+                ))}
               </div>
             </div>
           </div>

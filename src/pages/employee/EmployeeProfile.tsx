@@ -148,14 +148,14 @@ export default function EmployeeProfile() {
   if (loading) return <div className="flex justify-center py-12"><Loader2 className="animate-spin h-8 w-8 text-muted-foreground" /></div>;
 
   return (
-    <div className="space-y-6 animate-fade-in max-w-2xl">
+    <div className="space-y-6 animate-fade-in">
       <div>
         <h1 className="text-2xl font-bold">My Profile</h1>
         <p className="text-muted-foreground">Manage your personal information</p>
       </div>
 
-      <Card>
-        <CardHeader>
+      <Card className="rounded-2xl">
+        <CardHeader className="pb-4">
           <CardTitle className="text-base">Profile Completion</CardTitle>
           <div className="flex items-center gap-3 mt-2">
             <Progress value={completionPercent} className="flex-1" />
@@ -164,8 +164,19 @@ export default function EmployeeProfile() {
         </CardHeader>
       </Card>
 
-      <Card>
-        <CardContent className="pt-6">
+      <Card className="overflow-hidden rounded-3xl">
+        <div className="h-28 bg-[#0F172A]" />
+        <CardContent className="pt-0 pb-8">
+          <div className="relative -mt-10 mb-6 flex items-end justify-between">
+            {profile.avatar_url ? (
+              <img src={profile.avatar_url} alt="Profile" className="h-20 w-20 rounded-full object-cover border-4 border-white" />
+            ) : (
+              <div className="h-20 w-20 rounded-full bg-blue-600 text-white flex items-center justify-center text-2xl font-bold border-4 border-white">
+                {(profile.first_name || "E").trim().charAt(0).toUpperCase()}
+              </div>
+            )}
+            <Button variant="outline" className="rounded-xl">Edit Profile</Button>
+          </div>
           <form onSubmit={handleSave} className="space-y-4">
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
@@ -211,13 +222,9 @@ export default function EmployeeProfile() {
               <div className="space-y-2 sm:col-span-2">
                 <Label>Profile Picture</Label>
                 <div className="flex items-center gap-3">
-                  {profile.avatar_url ? (
-                    <img src={profile.avatar_url} alt="Profile" className="h-12 w-12 rounded-full object-cover border" />
-                  ) : (
-                    <div className="h-12 w-12 rounded-full bg-primary/15 text-primary flex items-center justify-center text-sm font-semibold border">
-                      {(profile.first_name || "E").trim().charAt(0).toUpperCase()}
-                    </div>
-                  )}
+                  <div className="h-12 w-12 rounded-full bg-primary/15 text-primary flex items-center justify-center text-sm font-semibold border">
+                    {(profile.first_name || "E").trim().charAt(0).toUpperCase()}
+                  </div>
                   <Input type="file" accept="image/*" disabled={uploadingImage} onChange={(e) => handleAvatarUpload(e.target.files?.[0])} />
                 </div>
                 {uploadingImage && <p className="text-xs text-muted-foreground flex items-center gap-1"><Loader2 className="h-3 w-3 animate-spin" /> Uploading image...</p>}

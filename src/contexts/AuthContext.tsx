@@ -233,12 +233,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
 
         const roles = (data ?? []).map((item) => item.role as AppRole);
+        // Enforce employee isolation: if employee role exists, treat account as employee
+        // unless explicitly super admin.
         const resolvedRole = isWhitelistedSuperAdmin || roles.includes("super_admin")
           ? "super_admin"
-          : roles.includes("admin")
-            ? "admin"
-            : roles.includes("employee")
-              ? "employee"
+          : roles.includes("employee")
+            ? "employee"
+            : roles.includes("admin")
+              ? "admin"
               : fallbackRole ?? "employee";
 
         setRole(resolvedRole);
