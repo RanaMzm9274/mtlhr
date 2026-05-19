@@ -88,6 +88,11 @@ function AppRoutes() {
     return <Navigate to={setPasswordTarget} replace />;
   }
 
+  const adminPath = (path: string) => {
+    if (!companySlug) return "/pending-approval";
+    return path ? `/${companySlug}/${path}` : `/${companySlug}`;
+  };
+
   return (
     <Routes>
       <Route path="/login" element={user ? <Navigate to={pendingBlocked ? "/pending-approval" : defaultHome} replace /> : <Login />} />
@@ -111,6 +116,31 @@ function AppRoutes() {
         <Route index element={<Navigate to="/super-admin/companies" replace />} />
         <Route path="companies" element={<SuperAdminCompanies />} />
       </Route>
+
+      <Route
+        path="/employees"
+        element={<Navigate to={adminPath("employees")} replace />}
+      />
+      <Route
+        path="/leaves"
+        element={<Navigate to={adminPath("leaves")} replace />}
+      />
+      <Route
+        path="/attendance"
+        element={<Navigate to={adminPath("attendance")} replace />}
+      />
+      <Route
+        path="/documents"
+        element={<Navigate to={adminPath("documents")} replace />}
+      />
+      <Route
+        path="/profile"
+        element={<Navigate to={adminPath("profile")} replace />}
+      />
+      <Route
+        path="/settings"
+        element={<Navigate to={adminPath("settings")} replace />}
+      />
 
       <Route path="/:companySlug" element={<ProtectedRoute requiredRole="admin"><DashboardLayout /></ProtectedRoute>}>
         <Route index element={<AdminDashboard />} />
