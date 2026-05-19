@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
+import { supabase } from "@/integrations/supabase/client";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Eye, EyeOff, Loader2 } from "lucide-react";
@@ -14,6 +15,7 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [resetLoading, setResetLoading] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -24,6 +26,26 @@ export default function Login() {
       toast({ title: "Login failed", description: err.message, variant: "destructive" });
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleForgotPassword = async () => {
+    if (!email.trim()) {
+      toast({ title: "Enter email first", description: "Please type your account email, then click Forgot password.", variant: "destructive" });
+      return;
+    }
+
+    setResetLoading(true);
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+        redirectTo: `${window.location.origin}/set-password?type=recovery`,
+      });
+      if (error) throw error;
+      toast({ title: "Reset email sent", description: "Check your inbox for the password reset link." });
+    } catch (err: any) {
+      toast({ title: "Reset failed", description: err.message, variant: "destructive" });
+    } finally {
+      setResetLoading(false);
     }
   };
 
@@ -78,9 +100,14 @@ export default function Login() {
             </div>
           </div>
 
-          <Link to="/set-password" className="block text-right text-sm text-[#409fff] hover:underline mt-[-8px] mb-6">
-            Forgot password?
-          </Link>
+          <button
+            type="button"
+            onClick={() => void handleForgotPassword()}
+            disabled={resetLoading}
+            className="block w-full text-right text-sm text-[#409fff] hover:underline mt-[-8px] mb-6 disabled:opacity-60"
+          >
+            {resetLoading ? "Sending reset link..." : "Forgot password?"}
+          </button>
 
           <button
             type="submit"

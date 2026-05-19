@@ -94,6 +94,7 @@ function AppRoutes() {
       <Route path="/signup" element={user ? <Navigate to={pendingBlocked ? "/pending-approval" : defaultHome} replace /> : <Signup />} />
       <Route path="/:companySlug/login" element={<Navigate to="/login" replace />} />
       <Route path="/set-password" element={<SetPassword />} />
+      <Route path="/reset-password" element={<SetPassword />} />
       <Route
         path="/pending-approval"
         element={
