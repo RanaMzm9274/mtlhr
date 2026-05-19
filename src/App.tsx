@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Route, Routes, Navigate, useLocation, useParams } from "react-router-dom";
+import { HashRouter, Route, Routes, Navigate, useLocation, useParams } from "react-router-dom";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -23,6 +23,7 @@ import NotFound from "@/pages/NotFound";
 import PendingApproval from "@/pages/PendingApproval";
 import SuperAdminCompanies from "@/pages/superadmin/SuperAdminCompanies";
 import { Loader2 } from "lucide-react";
+import { getBasePath } from "@/lib/basePath";
 
 const queryClient = new QueryClient();
 
@@ -171,11 +172,11 @@ const App = () => (
     <TooltipProvider>
       <Toaster />
       <Sonner />
-      <BrowserRouter basename={(window as Window & { MTLHR_PORTAL_BASE_PATH?: string }).MTLHR_PORTAL_BASE_PATH || "/"}>
+      <HashRouter basename={getBasePath()}>
         <AuthProvider>
           <AppRoutes />
         </AuthProvider>
-      </BrowserRouter>
+      </HashRouter>
     </TooltipProvider>
   </QueryClientProvider>
 );

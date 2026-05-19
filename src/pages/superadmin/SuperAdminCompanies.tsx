@@ -24,6 +24,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
+import { absoluteAppUrl } from "@/lib/basePath";
 
 interface CompanyRow {
   id: string;
@@ -178,7 +179,7 @@ export default function SuperAdminCompanies() {
           name: inviteName.trim(),
           position: invitePosition.trim(),
           company_id: inviteCompanyId,
-          redirectTo: `${window.location.origin}/set-password`,
+          redirectTo: absoluteAppUrl("/set-password"),
         },
       });
 

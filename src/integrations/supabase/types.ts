@@ -22,6 +22,7 @@ export type Database = {
           file_type: string
           file_url: string
           id: string
+          leave_request_id: string | null
           uploaded_at: string
           user_id: string
         }
@@ -32,6 +33,7 @@ export type Database = {
           file_type?: string
           file_url: string
           id?: string
+          leave_request_id?: string | null
           uploaded_at?: string
           user_id: string
         }
@@ -42,6 +44,7 @@ export type Database = {
           file_type?: string
           file_url?: string
           id?: string
+          leave_request_id?: string | null
           uploaded_at?: string
           user_id?: string
         }

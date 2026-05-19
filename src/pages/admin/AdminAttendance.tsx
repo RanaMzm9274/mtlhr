@@ -62,6 +62,18 @@ export default function AdminAttendance() {
   const [customToDate, setCustomToDate] = useState(today());
   const [reportRows, setReportRows] = useState<AttendanceRow[]>([]);
   const [reportLoading, setReportLoading] = useState(false);
+  const [breakColumnsSupported, setBreakColumnsSupported] = useState(true);
+
+  const normalizeAttendanceRows = (rows: any[] = []) =>
+    rows.map((row) => ({
+      ...row,
+      break_minutes: typeof row?.break_minutes === "number" ? row.break_minutes : 0,
+      break_started_at: row?.break_started_at ?? null,
+      break_selected_minutes: typeof row?.break_selected_minutes === "number" ? row.break_selected_minutes : null,
+    })) as AttendanceRow[];
+
+  const isMissingBreakColumnsError = (message?: string) =>
+    !!message && (message.includes("break_minutes") || message.includes("break_started_at") || message.includes("break_selected_minutes"));
 
   useEffect(() => {
     if (!companySlug) return;
@@ -70,14 +82,27 @@ export default function AdminAttendance() {
 
   const fetchData = async () => {
     if (!companyId) return;
-    const [{ data: empRows }, { data: attRows }] = await Promise.all([
+    const [{ data: empRows }, { data: attRows, error: attError }] = await Promise.all([
       supabase.from("employee_profiles").select("user_id,name,email").eq("company_id", companyId).order("name", { ascending: true }),
       supabase.from("attendance_entries").select("id,user_id,work_date,scheduled_start,scheduled_end,check_in_at,check_out_at,break_minutes,break_started_at,break_selected_minutes").eq("company_id", companyId).eq("work_date", date),
     ]);
 
+    let normalizedAttendance = normalizeAttendanceRows((attRows as any[]) ?? []);
+    if (attError && isMissingBreakColumnsError(attError.message)) {
+      const { data: fallbackRows, error: fallbackError } = await supabase
+        .from("attendance_entries")
+        .select("id,user_id,work_date,scheduled_start,scheduled_end,check_in_at,check_out_at")
+        .eq("company_id", companyId)
+        .eq("work_date", date);
+      if (!fallbackError) {
+        setBreakColumnsSupported(false);
+        normalizedAttendance = normalizeAttendanceRows((fallbackRows as any[]) ?? []);
+      }
+    }
+
     setEmployees((empRows as EmployeeRow[]) ?? []);
     const map = new Map<string, AttendanceRow>();
-    ((attRows as AttendanceRow[]) ?? []).forEach((row) => map.set(row.user_id, row));
+    normalizedAttendance.forEach((row) => map.set(row.user_id, row));
     setAttendance(map);
   };
 
@@ -106,10 +131,14 @@ export default function AdminAttendance() {
       scheduled_end: patch.scheduled_end ?? existing?.scheduled_end ?? null,
       check_in_at: patch.check_in_at ?? existing?.check_in_at ?? null,
       check_out_at: patch.check_out_at ?? existing?.check_out_at ?? null,
-      break_minutes: existing?.break_minutes ?? 0,
-      break_started_at: existing?.break_started_at ?? null,
-      break_selected_minutes: existing?.break_selected_minutes ?? null,
       updated_by: (await supabase.auth.getUser()).data.user?.id ?? null,
+      ...(breakColumnsSupported
+        ? {
+            break_minutes: existing?.break_minutes ?? 0,
+            break_started_at: existing?.break_started_at ?? null,
+            break_selected_minutes: existing?.break_selected_minutes ?? null,
+          }
+        : {}),
     };
 
     const { error } = await supabase.from("attendance_entries").upsert(payload, { onConflict: "company_id,user_id,work_date" });
@@ -233,13 +262,32 @@ export default function AdminAttendance() {
       .gte("work_date", range.from)
       .lte("work_date", range.to)
       .order("work_date", { ascending: false });
-    setReportLoading(false);
 
+    if (error && isMissingBreakColumnsError(error.message)) {
+      const { data: fallbackData, error: fallbackError } = await supabase
+        .from("attendance_entries")
+        .select("id,user_id,work_date,scheduled_start,scheduled_end,check_in_at,check_out_at")
+        .eq("company_id", companyId)
+        .eq("user_id", reportEmployeeId)
+        .gte("work_date", range.from)
+        .lte("work_date", range.to)
+        .order("work_date", { ascending: false });
+      setReportLoading(false);
+      if (fallbackError) {
+        toast({ title: "Report failed", description: fallbackError.message, variant: "destructive" });
+        return;
+      }
+      setBreakColumnsSupported(false);
+      setReportRows(normalizeAttendanceRows((fallbackData as any[]) ?? []));
+      return;
+    }
+
+    setReportLoading(false);
     if (error) {
       toast({ title: "Report failed", description: error.message, variant: "destructive" });
       return;
     }
-    setReportRows((data as AttendanceRow[]) ?? []);
+    setReportRows(normalizeAttendanceRows((data as any[]) ?? []));
   };
 
   useEffect(() => {

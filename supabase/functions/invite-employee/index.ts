@@ -29,19 +29,26 @@ function getAppOrigin(reqUrl: string): string {
   return fromRequest;
 }
 
+function getAppBasePath(): string {
+  const configured = Deno.env.get("APP_BASE_PATH")?.trim();
+  if (!configured) return "";
+  const withLeading = configured.startsWith("/") ? configured : `/${configured}`;
+  return withLeading.replace(/\/+$/, "");
+}
+
 function buildInviteRedirectTo(reqUrl: string, inputRedirectTo?: string): string {
   const appOrigin = getAppOrigin(reqUrl);
-  const fallback = `${appOrigin}/set-password`;
+  const appBasePath = getAppBasePath();
+  const fallback = `${appOrigin}${appBasePath}/set-password`;
 
   if (!inputRedirectTo) return fallback;
 
   try {
     const parsed = new URL(inputRedirectTo);
+    // Preserve provided path so subfolder deploys like /lt-docx keep working.
     const normalizedPath = parsed.pathname.replace(/\/+$/, "");
-    if (normalizedPath.endsWith("/set-password")) {
-      return `${parsed.origin}/set-password`;
-    }
-    return `${parsed.origin}/set-password`;
+    const safePath = normalizedPath.endsWith("/set-password") ? normalizedPath : `${normalizedPath}/set-password`;
+    return `${parsed.origin}${safePath}${parsed.search}${parsed.hash}`;
   } catch {
     return fallback;
   }
@@ -136,6 +143,7 @@ Deno.serve(async (req) => {
     }
 
     const appOrigin = getAppOrigin(req.url);
+    const appBasePath = getAppBasePath();
 
     const inviterName =
       (authData.user.user_metadata?.name as string | undefined) ??
@@ -143,7 +151,8 @@ Deno.serve(async (req) => {
       authData.user.email ??
       "Company Admin";
     const effectiveCompanyName = companyName ?? "Company";
-    const portalUrl = companySlug ? `${appOrigin}/${companySlug}/login` : `${appOrigin}/login`;
+    const portalBase = `${appOrigin}${appBasePath}`;
+    const portalUrl = companySlug ? `${portalBase}/${companySlug}/login` : `${portalBase}/login`;
     const redirectTo = buildInviteRedirectTo(req.url, parsed.data.redirectTo);
     const { data: inviteData, error: inviteError } = await adminClient.auth.admin.inviteUserByEmail(parsed.data.email, {
       redirectTo,

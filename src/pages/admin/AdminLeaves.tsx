@@ -17,14 +17,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Check, X, Loader2, MessageSquare, ArrowUp, ArrowDown, ChevronLeft, ChevronRight } from "lucide-react";
+import { Check, X, Loader2, MessageSquare, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, Paperclip } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { removeUndefined } from "@/lib/utils";
-import { indexProfilesByUserId, normalizeLeaveRecord, type LeaveRecord, type ProfileRecord } from "@/lib/hrPortal";
+import { DocumentPreviewDialog } from "@/components/DocumentPreviewDialog";
+import { indexProfilesByUserId, normalizeDocumentRecord, normalizeLeaveRecord, type DocumentRecord, type LeaveRecord, type ProfileRecord } from "@/lib/hrPortal";
 import { SUPABASE_REQUEST_TIMEOUT_MS, withTimeoutFallback } from "@/lib/async";
 
 interface LeaveRequest extends LeaveRecord {
   employee: ProfileRecord | null;
+  attachment: DocumentRecord | null;
 }
 
 type SortKey = "employee" | "leave_type" | "start_date" | "status" | "created_at";
@@ -40,18 +42,21 @@ export default function AdminLeaves() {
   const [selectedLeave, setSelectedLeave] = useState<LeaveRequest | null>(null);
   const [comment, setComment] = useState("");
   const [updating, setUpdating] = useState(false);
+  const [selectedDocument, setSelectedDocument] = useState<DocumentRecord | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>("created_at");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [page, setPage] = useState(1);
 
   const fetchLeaves = async () => {
     try {
-      const [{ data: leaveRows, error: leavesError }, { data: profileRows, error: profilesError }] = await withTimeoutFallback(
+      const [{ data: leaveRows, error: leavesError }, { data: profileRows, error: profilesError }, { data: documentRows, error: documentsError }] = await withTimeoutFallback(
         Promise.all([
           supabase.from("leave_requests").select("*").order("created_at", { ascending: false }),
           supabase.from("employee_profiles").select("*"),
+          supabase.from("documents").select("*").not("leave_request_id", "is", null).order("uploaded_at", { ascending: false }),
         ]),
         [
+          { data: [], error: null },
           { data: [], error: null },
           { data: [], error: null },
         ] as any,
@@ -60,14 +65,25 @@ export default function AdminLeaves() {
 
       if (leavesError) throw leavesError;
       if (profilesError) throw profilesError;
+      if (documentsError) throw documentsError;
 
       const profilesByUserId = indexProfilesByUserId(profileRows as any[]);
+      const attachmentByLeaveIdAndUser = new Map<string, DocumentRecord>();
+      ((documentRows as any[]) ?? []).forEach((doc) => {
+        const normalized = normalizeDocumentRecord(doc);
+        if (!normalized.leave_request_id || !normalized.user_id) return;
+        const key = `${normalized.leave_request_id}:${normalized.user_id}`;
+        if (attachmentByLeaveIdAndUser.has(key)) return;
+        attachmentByLeaveIdAndUser.set(key, normalized);
+      });
       setLeaves(
         ((leaveRows as any[]) ?? []).map((leave) => {
           const normalizedLeave = normalizeLeaveRecord(leave);
+          const attachmentKey = `${normalizedLeave.id}:${normalizedLeave.user_id}`;
           return {
             ...normalizedLeave,
             employee: profilesByUserId.get(normalizedLeave.user_id) ?? null,
+            attachment: attachmentByLeaveIdAndUser.get(attachmentKey) ?? null,
           };
         }),
       );
@@ -192,19 +208,20 @@ export default function AdminLeaves() {
                 <TableHead className="cursor-pointer select-none" onClick={() => handleSort("status")}>
                   Status <SortIcon col="status" />
                 </TableHead>
+                <TableHead>Attachment</TableHead>
                 <TableHead>Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center py-8">
+                  <TableCell colSpan={7} className="text-center py-8">
                     <Loader2 className="animate-spin mx-auto" />
                   </TableCell>
                 </TableRow>
               ) : paged.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
+                  <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
                     No leave requests
                   </TableCell>
                 </TableRow>
@@ -216,6 +233,15 @@ export default function AdminLeaves() {
                     <TableCell>{new Date(leave.start_date).toLocaleDateString()}</TableCell>
                     <TableCell>{new Date(leave.end_date).toLocaleDateString()}</TableCell>
                     <TableCell>{statusBadge(leave.status)}</TableCell>
+                    <TableCell>
+                      {leave.attachment ? (
+                        <Button variant="outline" size="sm" onClick={() => setSelectedDocument(leave.attachment)}>
+                          View
+                        </Button>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">-</span>
+                      )}
+                    </TableCell>
                     <TableCell>
                       <div className="flex flex-wrap gap-2">
                         <Button
@@ -236,6 +262,14 @@ export default function AdminLeaves() {
                         </Button>
                         <Button variant="outline" size="sm" onClick={() => { setSelectedLeave(leave); setComment(leave.admin_comment ?? ""); }}>
                           <MessageSquare className="h-4 w-4 mr-1" /> Review
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setSelectedDocument(leave.attachment)}
+                          disabled={!leave.attachment}
+                        >
+                          <Paperclip className="h-4 w-4 mr-1" /> View Attachment
                         </Button>
                       </div>
                     </TableCell>
@@ -286,6 +320,16 @@ export default function AdminLeaves() {
                 <p className="text-sm bg-muted p-3 rounded-md">{selectedLeave.reason}</p>
               </div>
               <div>
+                <p className="text-sm text-muted-foreground mb-1">Attachment:</p>
+                {selectedLeave.attachment ? (
+                  <Button variant="outline" size="sm" onClick={() => setSelectedDocument(selectedLeave.attachment)}>
+                    View Attached Document
+                  </Button>
+                ) : (
+                  <p className="text-sm text-muted-foreground">No attachment</p>
+                )}
+              </div>
+              <div>
                 <p className="text-sm text-muted-foreground mb-1">Admin Comment (optional):</p>
                 <Textarea value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Add a comment..." />
               </div>
@@ -301,6 +345,14 @@ export default function AdminLeaves() {
           )}
         </DialogContent>
       </Dialog>
+
+      <DocumentPreviewDialog
+        document={selectedDocument}
+        open={!!selectedDocument}
+        onOpenChange={(open) => {
+          if (!open) setSelectedDocument(null);
+        }}
+      />
     </div>
   );
 }

@@ -34,6 +34,7 @@ import { UserPlus, Search, Loader2, ArrowUp, ArrowDown, ChevronLeft, ChevronRigh
 import { useToast } from "@/hooks/use-toast";
 import { filterEmployeeProfiles, normalizeDocumentRecord, normalizeProfileRecord, type DocumentRecord, type ProfileRecord } from "@/lib/hrPortal";
 import { SUPABASE_REQUEST_TIMEOUT_MS, withTimeout, withTimeoutFallback } from "@/lib/async";
+import { absoluteAppUrl } from "@/lib/basePath";
 import { Line, LineChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
 
@@ -132,7 +133,7 @@ export default function EmployeeList() {
             email: inviteEmail.trim(),
             name: inviteName.trim(),
             position: invitePosition.trim(),
-            redirectTo: `${window.location.origin}/set-password`,
+            redirectTo: absoluteAppUrl("/set-password"),
           },
         }),
         SUPABASE_REQUEST_TIMEOUT_MS,

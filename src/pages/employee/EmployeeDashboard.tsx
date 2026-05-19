@@ -11,6 +11,13 @@ import { Line, LineChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
 
 const today = () => new Date().toISOString().slice(0, 10);
+const formatDuration = (milliseconds: number) => {
+  const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+};
 
 export default function EmployeeDashboard() {
   const { user } = useAuth();
@@ -22,6 +29,7 @@ export default function EmployeeDashboard() {
   const [busy, setBusy] = useState(false);
   const [nowTick, setNowTick] = useState(Date.now());
   const [selectedBreakMinutes, setSelectedBreakMinutes] = useState(15);
+  const [companyId, setCompanyId] = useState<string | null>(null);
 
   useEffect(() => {
     const interval = setInterval(() => setNowTick(Date.now()), 1000);
@@ -58,7 +66,25 @@ export default function EmployeeDashboard() {
       SUPABASE_REQUEST_TIMEOUT_MS,
     );
 
-    setAttendance(todayEntry ?? null);
+    let activeEntry = todayEntry ?? null;
+    if (!activeEntry) {
+      const { data: latestOpenEntry } = await withTimeoutFallback(
+        supabase
+          .from("attendance_entries")
+          .select("*")
+          .eq("company_id", companyId)
+          .eq("user_id", user.id)
+          .is("check_out_at", null)
+          .order("check_in_at", { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+        { data: null, error: null } as any,
+        SUPABASE_REQUEST_TIMEOUT_MS,
+      );
+      activeEntry = latestOpenEntry ?? null;
+    }
+
+    setAttendance(activeEntry);
     setAttendanceRows((history as Array<{ work_date: string; check_in_at: string | null; check_out_at: string | null }>) ?? []);
   };
 
@@ -77,20 +103,31 @@ export default function EmployeeDashboard() {
         );
 
         const normalizedProfile = normalizeProfileRecord((prof as any[])?.[0], user);
+        const resolvedCompanyId = (prof as any[])?.[0]?.company_id ?? null;
         const normalizedLeaves = ((leaves as any[]) ?? []).map((leave) => normalizeLeaveRecord(leave));
         setProfile(normalizedProfile);
+        setCompanyId(resolvedCompanyId);
         setStats({
           docs: docs?.length ?? 0,
           pendingLeaves: normalizedLeaves.filter((leave) => leave.status === "pending").length,
           approvedLeaves: normalizedLeaves.filter((leave) => leave.status === "approved").length,
         });
-        await fetchAttendance((prof as any[])?.[0]?.company_id ?? null);
+        await fetchAttendance(resolvedCompanyId);
       } catch (err) {
         console.error("Failed to fetch employee dashboard:", err);
       }
     };
     fetch();
   }, [user]);
+
+  useEffect(() => {
+    if (!companyId) return;
+    if (!attendance?.check_in_at || attendance?.check_out_at) return;
+    const interval = setInterval(() => {
+      void fetchAttendance(companyId);
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [attendance?.check_in_at, attendance?.check_out_at, companyId]);
 
   const upsertAttendance = async (mode: "in" | "out") => {
     if (!user || !profile?.company_id) {
@@ -143,14 +180,103 @@ export default function EmployeeDashboard() {
   const toggleBreak = async () => {
     if (!user || !profile?.company_id) return;
     setBusy(true);
-    const { error } = await supabase.rpc("record_my_break", {
+    const primaryRpc = await supabase.rpc("record_my_break", {
       p_company_id: profile.company_id,
       p_mode: onBreak ? "end" : "start",
       p_minutes: onBreak ? null : selectedBreakMinutes,
     });
+    const secondaryRpc =
+      primaryRpc.error
+        ? await supabase.rpc("record_my_break", {
+            p_company_id: profile.company_id,
+            p_mode: onBreak ? "end" : "start",
+          } as any)
+        : { error: null };
+    const error = primaryRpc.error && secondaryRpc.error ? secondaryRpc.error : null;
+    const rpcFailed = !!error;
+
+    if (rpcFailed) {
+      let activeAttendance = attendance as any;
+      if (!activeAttendance?.id) {
+        const { data: fallbackEntry } = await withTimeoutFallback(
+          supabase
+            .from("attendance_entries")
+            .select("*")
+            .eq("company_id", profile.company_id)
+            .eq("user_id", user.id)
+            .is("check_out_at", null)
+            .order("check_in_at", { ascending: false })
+            .limit(1)
+            .maybeSingle(),
+          { data: null, error: null } as any,
+          SUPABASE_REQUEST_TIMEOUT_MS,
+        );
+        activeAttendance = fallbackEntry ?? null;
+      }
+
+      if (!activeAttendance?.id) {
+        setBusy(false);
+        toast({ title: "Break failed", description: "No active shift found. Please clock in first.", variant: "destructive" });
+        return;
+      }
+
+      if (!onBreak) {
+        const { error: startBreakError } = await supabase
+          .from("attendance_entries")
+          .update({
+            break_started_at: new Date().toISOString(),
+            break_selected_minutes: selectedBreakMinutes,
+          } as any)
+          .eq("id", activeAttendance.id);
+        setBusy(false);
+        if (startBreakError) {
+          if (startBreakError.message.includes("break_started_at") || startBreakError.message.includes("break_selected_minutes")) {
+            toast({
+              title: "Break unavailable",
+              description: "Break tracking columns are missing in this company DB. Run the break tracking migration.",
+              variant: "destructive",
+            });
+            return;
+          }
+          toast({ title: "Break failed", description: startBreakError.message, variant: "destructive" });
+          return;
+        }
+        toast({ title: "Break started" });
+      } else {
+        const usedMinutes = Number(activeAttendance.break_minutes ?? 0);
+        const selectedMinutes = Number(activeAttendance.break_selected_minutes ?? selectedBreakMinutes ?? 0);
+        const nextBreakMinutes = Math.min(60, usedMinutes + selectedMinutes);
+        const { error: endBreakError } = await supabase
+          .from("attendance_entries")
+          .update({
+            break_minutes: nextBreakMinutes,
+            break_started_at: null,
+            break_selected_minutes: null,
+          } as any)
+          .eq("id", activeAttendance.id);
+        setBusy(false);
+        if (endBreakError) {
+          if (endBreakError.message.includes("break_minutes") || endBreakError.message.includes("break_started_at")) {
+            toast({
+              title: "Break unavailable",
+              description: "Break tracking columns are missing in this company DB. Run the break tracking migration.",
+              variant: "destructive",
+            });
+            return;
+          }
+          toast({ title: "Break failed", description: endBreakError.message, variant: "destructive" });
+          return;
+        }
+        toast({ title: "Break ended" });
+      }
+
+      fetchAttendance(profile.company_id);
+      return;
+    }
+
     setBusy(false);
-    if (error) {
-      toast({ title: "Break failed", description: error.message, variant: "destructive" });
+    if (primaryRpc.error && secondaryRpc.error) {
+      toast({ title: "Break failed", description: "Break RPC failed and fallback was not possible.", variant: "destructive" });
       return;
     }
     toast({ title: onBreak ? "Break ended" : "Break started" });
@@ -212,23 +338,18 @@ export default function EmployeeDashboard() {
   }, [attendanceRows]);
 
   const shiftDurationText = useMemo(() => {
-    if (!attendance?.check_in_at) return "00:00:00";
-    const startMs = new Date(attendance.check_in_at).getTime();
+    const openHistoryRow = [...attendanceRows]
+      .reverse()
+      .find((row) => row.check_in_at && !row.check_out_at);
+    const startIso = attendance?.check_in_at || openHistoryRow?.check_in_at;
+    if (!startIso) return "00:00:00";
+    const startMs = new Date(startIso).getTime();
     const endMs = attendance?.check_out_at ? new Date(attendance.check_out_at).getTime() : nowTick;
-    const diff = Math.max(0, endMs - startMs);
-    const totalSeconds = Math.floor(diff / 1000);
-    const hours = Math.floor(totalSeconds / 3600);
-    const minutes = Math.floor((totalSeconds % 3600) / 60);
-    const seconds = totalSeconds % 60;
-    return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
-  }, [attendance?.check_in_at, attendance?.check_out_at, nowTick]);
+    return formatDuration(endMs - startMs);
+  }, [attendance?.check_in_at, attendance?.check_out_at, attendanceRows, nowTick]);
 
   const heroDate = useMemo(
     () => new Date(nowTick).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" }),
-    [nowTick],
-  );
-  const heroTime = useMemo(
-    () => new Date(nowTick).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
     [nowTick],
   );
   const availableBreakOptions = useMemo(
@@ -249,12 +370,18 @@ export default function EmployeeDashboard() {
           <div className="relative z-10 flex flex-col md:flex-row md:items-center md:justify-between gap-5">
             <div>
               <p className="text-[32px] text-slate-600 font-semibold mb-1">{heroDate}</p>
-              <h2 className="text-6xl leading-none font-black tracking-tight">{heroTime}</h2>
+              <h2 className="text-6xl leading-none font-black tracking-tight">{shiftDurationText}</h2>
               <div className="mt-4 flex items-center gap-2 text-base text-slate-500">
                 <MapPin size={16} />
                 <span>Remote - London Office</span>
               </div>
-              <p className="mt-3 text-sm font-semibold text-slate-700">Shift Timer: {shiftDurationText}</p>
+              <p className="mt-3 text-sm font-semibold text-slate-700">
+                {attendance?.check_in_at
+                  ? attendance?.check_out_at
+                    ? "Shift completed"
+                    : "Shift in progress"
+                  : "Not clocked in"}
+              </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <Button className="h-14 px-8 rounded-2xl text-xl font-bold" disabled={busy || !!attendance?.check_in_at} onClick={() => upsertAttendance("in")}>
@@ -342,7 +469,7 @@ export default function EmployeeDashboard() {
                   </div>
                   <span className="font-semibold">{h.name}</span>
                 </div>
-                <span className="text-slate-300">↗</span>
+                <span className="text-slate-300" aria-hidden="true">&#8599;</span>
               </div>
             ))}
           </CardContent>
@@ -351,3 +478,4 @@ export default function EmployeeDashboard() {
     </div>
   );
 }
+

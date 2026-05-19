@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
@@ -24,7 +24,8 @@ import {
 } from "@/components/ui/table";
 import { Plus, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { buildDocumentInsertPayload, buildLeaveInsertPayload, normalizeLeaveRecord } from "@/lib/hrPortal";
+import { DocumentPreviewDialog } from "@/components/DocumentPreviewDialog";
+import { buildDocumentInsertPayload, buildLeaveInsertPayload, normalizeDocumentRecord, normalizeLeaveRecord, type DocumentRecord } from "@/lib/hrPortal";
 import { SUPABASE_REQUEST_TIMEOUT_MS, withTimeout, withTimeoutFallback } from "@/lib/async";
 
 interface LeaveRequest {
@@ -36,6 +37,7 @@ interface LeaveRequest {
   status: string;
   admin_comment: string | null;
   created_at: string;
+  attachment: DocumentRecord | null;
 }
 
 export default function EmployeeLeave() {
@@ -46,6 +48,9 @@ export default function EmployeeLeave() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [attachment, setAttachment] = useState<File | null>(null);
+  const [selectedDocument, setSelectedDocument] = useState<DocumentRecord | null>(null);
+  const [filterFromDate, setFilterFromDate] = useState("");
+  const [filterToDate, setFilterToDate] = useState("");
   const [form, setForm] = useState({
     leave_type: "annual",
     start_date: "",
@@ -59,13 +64,34 @@ export default function EmployeeLeave() {
       return;
     }
     try {
-      const { data, error } = await withTimeoutFallback(
-        supabase.from("leave_requests").select("*").eq("user_id", user.id).order("created_at", { ascending: false }),
-        { data: [], error: null } as any,
+      const [{ data: leaveRows, error: leaveError }, { data: documentRows, error: documentError }] = await withTimeoutFallback(
+        Promise.all([
+          supabase.from("leave_requests").select("*").eq("user_id", user.id).order("created_at", { ascending: false }),
+          supabase.from("documents").select("*").eq("user_id", user.id).not("leave_request_id", "is", null).order("uploaded_at", { ascending: false }),
+        ]),
+        [{ data: [], error: null }, { data: [], error: null }] as any,
         SUPABASE_REQUEST_TIMEOUT_MS,
       );
-      if (error) throw error;
-      setLeaves(((data as any[]) ?? []).map((leave) => normalizeLeaveRecord(leave)));
+      if (leaveError) throw leaveError;
+      if (documentError) throw documentError;
+      const attachmentByLeaveIdAndUser = new Map<string, DocumentRecord>();
+      ((documentRows as any[]) ?? []).forEach((doc) => {
+        const normalized = normalizeDocumentRecord(doc);
+        if (!normalized.leave_request_id || !normalized.user_id) return;
+        const key = `${normalized.leave_request_id}:${normalized.user_id}`;
+        if (attachmentByLeaveIdAndUser.has(key)) return;
+        attachmentByLeaveIdAndUser.set(key, normalized);
+      });
+      setLeaves(
+        ((leaveRows as any[]) ?? []).map((leave) => {
+          const normalized = normalizeLeaveRecord(leave);
+          const attachmentKey = `${normalized.id}:${normalized.user_id}`;
+          return {
+            ...normalized,
+            attachment: attachmentByLeaveIdAndUser.get(attachmentKey) ?? null,
+          };
+        }),
+      );
     } catch (err) {
       console.error("Failed to fetch leave requests:", err);
     } finally {
@@ -85,7 +111,18 @@ export default function EmployeeLeave() {
 
     setSubmitting(true);
     let uploadedPath: string | null = null;
+    let leaveRequestId: string | null = null;
     try {
+      const payload = buildLeaveInsertPayload(user.id, form);
+      const { data: createdLeave, error: leaveError } = await withTimeout(
+        supabase.from("leave_requests").insert(payload as any).select("id").single(),
+        SUPABASE_REQUEST_TIMEOUT_MS,
+        "Leave submission",
+      );
+      if (leaveError) throw leaveError;
+      leaveRequestId = (createdLeave as { id?: string } | null)?.id ?? null;
+      if (!leaveRequestId) throw new Error("Leave request could not be created.");
+
       if (attachment) {
         const allowedTypes = ["application/pdf", "image/jpeg", "image/png"];
         if (!allowedTypes.includes(attachment.type)) {
@@ -105,7 +142,7 @@ export default function EmployeeLeave() {
         if (uploadError) throw uploadError;
         uploadedPath = path;
 
-        const docPayload = buildDocumentInsertPayload(user.id, path, attachment, "certificate");
+        const docPayload = buildDocumentInsertPayload(user.id, path, attachment, "certificate", leaveRequestId);
         const { error: docError } = await withTimeout(
           supabase.from("documents").insert(docPayload as any),
           SUPABASE_REQUEST_TIMEOUT_MS,
@@ -114,13 +151,6 @@ export default function EmployeeLeave() {
         if (docError) throw docError;
       }
 
-      const payload = buildLeaveInsertPayload(user.id, form);
-      const { error } = await withTimeout(
-        supabase.from("leave_requests").insert(payload as any),
-        SUPABASE_REQUEST_TIMEOUT_MS,
-        "Leave submission",
-      );
-      if (error) throw error;
       toast({ title: "Leave request submitted" });
       setDialogOpen(false);
       setForm({ leave_type: "annual", start_date: "", end_date: "", reason: "" });
@@ -132,6 +162,13 @@ export default function EmployeeLeave() {
           supabase.storage.from("documents").remove([uploadedPath]),
           SUPABASE_REQUEST_TIMEOUT_MS,
           "Leave attachment rollback",
+        ).catch(() => undefined);
+      }
+      if (leaveRequestId) {
+        await withTimeout(
+          supabase.from("leave_requests").delete().eq("id", leaveRequestId),
+          SUPABASE_REQUEST_TIMEOUT_MS,
+          "Leave submission rollback",
         ).catch(() => undefined);
       }
       toast({ title: "Error", description: err.message, variant: "destructive" });
@@ -148,6 +185,25 @@ export default function EmployeeLeave() {
     };
     return <span className={map[status] || ""}>{status}</span>;
   };
+
+  const filteredLeaves = useMemo(() => {
+    let list = [...leaves];
+    if (!filterFromDate && !filterToDate) return list;
+
+    const from = filterFromDate ? new Date(`${filterFromDate}T00:00:00`) : null;
+    const to = filterToDate ? new Date(`${filterToDate}T23:59:59`) : null;
+
+    list = list.filter((leave) => {
+      const leaveStart = new Date(`${leave.start_date}T00:00:00`);
+      const leaveEnd = new Date(`${leave.end_date}T23:59:59`);
+      if (Number.isNaN(leaveStart.getTime()) || Number.isNaN(leaveEnd.getTime())) return false;
+      if (from && leaveEnd < from) return false;
+      if (to && leaveStart > to) return false;
+      return true;
+    });
+
+    return list;
+  }, [leaves, filterFromDate, filterToDate]);
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -212,6 +268,38 @@ export default function EmployeeLeave() {
 
       <Card className="wf-panel">
         <CardContent className="pt-6">
+          <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end">
+            <div className="space-y-1">
+              <Label htmlFor="leave-filter-from">From Date</Label>
+              <Input
+                id="leave-filter-from"
+                type="date"
+                value={filterFromDate}
+                onChange={(e) => setFilterFromDate(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="leave-filter-to">To Date</Label>
+              <Input
+                id="leave-filter-to"
+                type="date"
+                value={filterToDate}
+                onChange={(e) => setFilterToDate(e.target.value)}
+              />
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setFilterFromDate("");
+                setFilterToDate("");
+              }}
+              disabled={!filterFromDate && !filterToDate}
+            >
+              Reset
+            </Button>
+          </div>
+
           <Table>
             <TableHeader className="wf-table-head">
               <TableRow>
@@ -221,15 +309,16 @@ export default function EmployeeLeave() {
                 <TableHead>Reason</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Comment</TableHead>
+                <TableHead>Attachment</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {loading ? (
-                <TableRow><TableCell colSpan={6} className="text-center py-8"><Loader2 className="animate-spin mx-auto" /></TableCell></TableRow>
-              ) : leaves.length === 0 ? (
-                <TableRow><TableCell colSpan={6} className="text-center py-8 text-muted-foreground">No leave requests</TableCell></TableRow>
+                <TableRow><TableCell colSpan={7} className="text-center py-8"><Loader2 className="animate-spin mx-auto" /></TableCell></TableRow>
+              ) : filteredLeaves.length === 0 ? (
+                <TableRow><TableCell colSpan={7} className="text-center py-8 text-muted-foreground">No leave requests</TableCell></TableRow>
               ) : (
-                leaves.map((leave) => (
+                filteredLeaves.map((leave) => (
                   <TableRow key={leave.id}>
                     <TableCell className="capitalize font-medium">{leave.leave_type}</TableCell>
                     <TableCell>{new Date(leave.start_date).toLocaleDateString()}</TableCell>
@@ -239,6 +328,15 @@ export default function EmployeeLeave() {
                     <TableCell className="text-sm text-muted-foreground whitespace-pre-wrap break-words">
                       {leave.admin_comment || "-"}
                     </TableCell>
+                    <TableCell>
+                      {leave.attachment ? (
+                        <Button variant="outline" size="sm" onClick={() => setSelectedDocument(leave.attachment)}>
+                          View
+                        </Button>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">-</span>
+                      )}
+                    </TableCell>
                   </TableRow>
                 ))
               )}
@@ -246,6 +344,14 @@ export default function EmployeeLeave() {
           </Table>
         </CardContent>
       </Card>
+
+      <DocumentPreviewDialog
+        document={selectedDocument}
+        open={!!selectedDocument}
+        onOpenChange={(open) => {
+          if (!open) setSelectedDocument(null);
+        }}
+      />
     </div>
   );
 }

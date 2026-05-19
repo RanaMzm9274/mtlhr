@@ -1,0 +1,5 @@
+{
+  "app": "mtlhr",
+  "build_fingerprint": "2026-05-19T19:30:00Z-router-shift-break-fixes",
+  "note": "If this value is not visible on production, you are deploying to a different web root."
+}

@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Eye, EyeOff, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { absoluteAppUrl } from "@/lib/basePath";
 
 export default function Login() {
   const { signIn } = useAuth();
@@ -38,7 +39,7 @@ export default function Login() {
     setResetLoading(true);
     try {
       const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
-        redirectTo: `${window.location.origin}/set-password?type=recovery`,
+        redirectTo: absoluteAppUrl("/set-password?type=recovery"),
       });
       if (error) throw error;
       toast({ title: "Reset email sent", description: "Check your inbox for the password reset link." });

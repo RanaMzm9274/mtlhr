@@ -24,6 +24,7 @@ export interface ProfileRecord {
 export interface DocumentRecord {
   id: string;
   user_id: string;
+  leave_request_id?: string | null;
   file_url: string;
   storage_path: string;
   file_name: string;
@@ -122,6 +123,7 @@ export const normalizeProfileRecord = (row: AnyRecord, user?: Pick<User, "email"
 export const normalizeDocumentRecord = (row: AnyRecord): DocumentRecord => ({
   id: firstString(row?.id),
   user_id: firstString(row?.user_id, row?.employee_id, row?.uploaded_by),
+  leave_request_id: firstNullableString(row?.leave_request_id),
   file_url: firstString(row?.file_url, row?.storage_path, row?.path, row?.file_name),
   storage_path: firstString(row?.storage_path, row?.file_url, row?.path, row?.file_name),
   file_name: firstString(row?.file_name, row?.title, row?.document_name),
@@ -144,7 +146,13 @@ export const normalizeLeaveRecord = (row: AnyRecord): LeaveRecord => ({
   updated_at: firstString(row?.updated_at) || undefined,
 });
 
-export const buildDocumentInsertPayload = (userId: string, path: string, file: File, category: string) => {
+export const buildDocumentInsertPayload = (
+  userId: string,
+  path: string,
+  file: File,
+  category: string,
+  leaveRequestId?: string,
+) => {
   const ext = file.name.split(".").pop()?.toLowerCase() || "";
 
   return {
@@ -154,6 +162,7 @@ export const buildDocumentInsertPayload = (userId: string, path: string, file: F
     file_name: file.name,
     file_type: ext,
     category,
+    leave_request_id: leaveRequestId || null,
     uploaded_at: new Date().toISOString(),
   };
 };
