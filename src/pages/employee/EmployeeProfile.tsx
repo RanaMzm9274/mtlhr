@@ -18,22 +18,30 @@ interface ProfileData {
   first_name: string;
   surname: string;
   email: string;
+  date_of_birth: string;
   phone: string;
+  address: string;
   gender: string;
   position: string;
   id_passport: string;
-  date_of_birth: string;
+  employment_type: "full_time" | "part_time";
+  working_hours: string;
 }
 
 export default function EmployeeProfile() {
   const { user } = useAuth();
   const { toast } = useToast();
   const [profile, setProfile] = useState<ProfileData>({
-    avatar_url: "", first_name: "", surname: "", email: "", phone: "", gender: "", position: "", id_passport: "", date_of_birth: "",
+    avatar_url: "", first_name: "", surname: "", email: "", date_of_birth: "", phone: "", address: "", gender: "", position: "", id_passport: "", employment_type: "full_time", working_hours: "9",
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [uploadingImage, setUploadingImage] = useState(false);
+  const minAllowedDob = (() => {
+    const today = new Date();
+    today.setFullYear(today.getFullYear() - 18);
+    return today.toISOString().slice(0, 10);
+  })();
 
   useEffect(() => {
     if (!user) {
@@ -61,12 +69,15 @@ export default function EmployeeProfile() {
           first_name: first_name || "",
           surname: surnameParts.join(" "),
           email: normalized.email,
+          date_of_birth: ((data as any[])?.[0]?.date_of_birth as string | undefined) ?? "",
           phone: normalized.phone,
+          address: ((data as any[])?.[0]?.address as string | undefined) ?? "",
           gender: normalized.gender,
           position: normalized.position,
           id_passport: normalized.id_passport,
-          date_of_birth: "",
           avatar_url: normalized.avatar_url || "",
+          employment_type: (normalized.employment_type === "part_time" ? "part_time" : "full_time"),
+          working_hours: normalized.working_hours ? String(normalized.working_hours) : "9",
         });
       } catch (err) {
         console.error("Error fetching profile:", err);
@@ -83,11 +94,28 @@ export default function EmployeeProfile() {
     gender: profile.gender,
     position: profile.position,
     id_passport: profile.id_passport,
-  });
+  } as any);
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user) return;
+    if (profile.date_of_birth) {
+      const dob = new Date(`${profile.date_of_birth}T00:00:00`);
+      const now = new Date();
+      let age = now.getFullYear() - dob.getFullYear();
+      const monthDiff = now.getMonth() - dob.getMonth();
+      if (monthDiff < 0 || (monthDiff === 0 && now.getDate() < dob.getDate())) {
+        age--;
+      }
+      if (Number.isNaN(dob.getTime()) || age < 18) {
+        toast({
+          title: "Invalid date of birth",
+          description: "Employee must be at least 18 years old.",
+          variant: "destructive",
+        });
+        return;
+      }
+    }
     setSaving(true);
     try {
       const fullName = `${profile.first_name} ${profile.surname}`.trim();
@@ -103,6 +131,8 @@ export default function EmployeeProfile() {
           avatar_url: profile.avatar_url || null,
           profile_completed: completionPercent === 100,
         }),
+        date_of_birth: profile.date_of_birth || null,
+        address: profile.address || null,
         status: "active",
       } as any);
       const savedRow = await saveProfileRecord(supabase, payload as any);
@@ -112,12 +142,15 @@ export default function EmployeeProfile() {
         first_name: first_name || "",
         surname: surnameParts.join(" "),
         email: normalized.email,
+        date_of_birth: ((savedRow as any)?.date_of_birth as string | undefined) ?? profile.date_of_birth,
         phone: normalized.phone,
+        address: ((savedRow as any)?.address as string | undefined) ?? "",
         gender: normalized.gender,
         position: normalized.position,
         id_passport: normalized.id_passport,
-        date_of_birth: profile.date_of_birth,
         avatar_url: normalized.avatar_url || "",
+        employment_type: (normalized.employment_type === "part_time" ? "part_time" : "full_time"),
+        working_hours: normalized.working_hours ? String(normalized.working_hours) : "9",
       });
       toast({ title: "Profile updated" });
     } catch (err: any) {
@@ -165,13 +198,12 @@ export default function EmployeeProfile() {
       </Card>
 
       <Card className="overflow-hidden rounded-3xl">
-        <div className="h-28 bg-[#0F172A]" />
-        <CardContent className="pt-0 pb-8">
-          <div className="relative -mt-10 mb-6 flex items-end justify-between">
+        <CardContent className="pt-8 pb-8">
+          <div className="mb-6 flex flex-col items-center gap-3">
             {profile.avatar_url ? (
-              <img src={profile.avatar_url} alt="Profile" className="h-20 w-20 rounded-full object-cover border-4 border-white" />
+              <img src={profile.avatar_url} alt="Profile" className="h-20 w-20 rounded-full object-cover border" />
             ) : (
-              <div className="h-20 w-20 rounded-full bg-blue-600 text-white flex items-center justify-center text-2xl font-bold border-4 border-white">
+              <div className="h-20 w-20 rounded-full bg-blue-600 text-white flex items-center justify-center text-2xl font-bold border">
                 {(profile.first_name || "E").trim().charAt(0).toUpperCase()}
               </div>
             )}
@@ -192,12 +224,16 @@ export default function EmployeeProfile() {
                 <Input value={profile.email} disabled className="bg-muted" />
               </div>
               <div className="space-y-2">
-                <Label>ID / Passport Number</Label>
-                <Input value={profile.id_passport} onChange={(e) => setProfile({ ...profile, id_passport: e.target.value })} placeholder="Enter ID or passport number" />
+                <Label>Date of Birth</Label>
+                <Input type="date" max={minAllowedDob} value={profile.date_of_birth} onChange={(e) => setProfile({ ...profile, date_of_birth: e.target.value })} />
               </div>
               <div className="space-y-2">
                 <Label>Phone</Label>
                 <Input value={profile.phone} onChange={(e) => setProfile({ ...profile, phone: e.target.value })} placeholder="+44 ..." />
+              </div>
+              <div className="space-y-2">
+                <Label>Address</Label>
+                <Input value={profile.address} onChange={(e) => setProfile({ ...profile, address: e.target.value })} placeholder="Enter your address" />
               </div>
               <div className="space-y-2">
                 <Label>Gender</Label>
@@ -216,8 +252,16 @@ export default function EmployeeProfile() {
                 <Input value={profile.position} disabled className="bg-muted" />
               </div>
               <div className="space-y-2">
-                <Label>Date of Birth</Label>
-                <Input type="date" value={profile.date_of_birth} onChange={(e) => setProfile({ ...profile, date_of_birth: e.target.value })} />
+                <Label>Employment Type</Label>
+                <Input value={profile.employment_type === "part_time" ? "Part Time" : "Full Time"} disabled className="bg-muted" />
+              </div>
+              <div className="space-y-2">
+                <Label>Shift Hours</Label>
+                <Input value={profile.employment_type === "part_time" ? `${profile.working_hours}h` : "9h (including break)"} disabled className="bg-muted" />
+              </div>
+              <div className="space-y-2">
+                <Label>ID / Passport Number</Label>
+                <Input value={profile.id_passport} onChange={(e) => setProfile({ ...profile, id_passport: e.target.value })} placeholder="Enter ID or passport number" />
               </div>
               <div className="space-y-2 sm:col-span-2">
                 <Label>Profile Picture</Label>

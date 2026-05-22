@@ -33,6 +33,7 @@ interface AttendanceRow {
   break_minutes: number | null;
   break_started_at: string | null;
   break_selected_minutes: number | null;
+  manual_work_hours: number | null;
 }
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -51,10 +52,10 @@ export default function AdminAttendance() {
   const [bulkEmployee, setBulkEmployee] = useState<EmployeeRow | null>(null);
   const [bulkFromDate, setBulkFromDate] = useState(today());
   const [bulkToDate, setBulkToDate] = useState(today());
-  const [bulkCheckinTime, setBulkCheckinTime] = useState("09:00");
-  const [bulkCheckoutTime, setBulkCheckoutTime] = useState("18:00");
-  const [skipSaturday, setSkipSaturday] = useState(false);
-  const [skipSunday, setSkipSunday] = useState(false);
+  const [bulkEmploymentType, setBulkEmploymentType] = useState<"full_time" | "part_time">("full_time");
+  const [bulkWorkingHours, setBulkWorkingHours] = useState("9");
+  const [skipSaturday, setSkipSaturday] = useState(true);
+  const [skipSunday, setSkipSunday] = useState(true);
   const [bulkSaving, setBulkSaving] = useState(false);
   const [reportEmployeeId, setReportEmployeeId] = useState<string>("");
   const [reportPreset, setReportPreset] = useState<ReportPreset>("weekly");
@@ -70,6 +71,7 @@ export default function AdminAttendance() {
       break_minutes: typeof row?.break_minutes === "number" ? row.break_minutes : 0,
       break_started_at: row?.break_started_at ?? null,
       break_selected_minutes: typeof row?.break_selected_minutes === "number" ? row.break_selected_minutes : null,
+      manual_work_hours: typeof row?.manual_work_hours === "number" ? row.manual_work_hours : null,
     })) as AttendanceRow[];
 
   const isMissingBreakColumnsError = (message?: string) =>
@@ -84,7 +86,7 @@ export default function AdminAttendance() {
     if (!companyId) return;
     const [{ data: empRows }, { data: attRows, error: attError }] = await Promise.all([
       supabase.from("employee_profiles").select("user_id,name,email").eq("company_id", companyId).order("name", { ascending: true }),
-      supabase.from("attendance_entries").select("id,user_id,work_date,scheduled_start,scheduled_end,check_in_at,check_out_at,break_minutes,break_started_at,break_selected_minutes").eq("company_id", companyId).eq("work_date", date),
+      supabase.from("attendance_entries").select("id,user_id,work_date,scheduled_start,scheduled_end,check_in_at,check_out_at,break_minutes,break_started_at,break_selected_minutes,manual_work_hours").eq("company_id", companyId).eq("work_date", date),
     ]);
 
     let normalizedAttendance = normalizeAttendanceRows((attRows as any[]) ?? []);
@@ -123,14 +125,17 @@ export default function AdminAttendance() {
     if (!companyId) return;
     setSaving(userId);
     const existing = attendance.get(userId);
+    const nextScheduledStart = patch.scheduled_start ?? existing?.scheduled_start ?? null;
+    const nextScheduledEnd = patch.scheduled_end ?? existing?.scheduled_end ?? null;
     const payload = {
       company_id: companyId,
       user_id: userId,
       work_date: date,
-      scheduled_start: patch.scheduled_start ?? existing?.scheduled_start ?? null,
-      scheduled_end: patch.scheduled_end ?? existing?.scheduled_end ?? null,
+      scheduled_start: nextScheduledStart,
+      scheduled_end: nextScheduledEnd,
       check_in_at: patch.check_in_at ?? existing?.check_in_at ?? null,
       check_out_at: patch.check_out_at ?? existing?.check_out_at ?? null,
+      manual_work_hours: patch.manual_work_hours ?? existing?.manual_work_hours ?? null,
       updated_by: (await supabase.auth.getUser()).data.user?.id ?? null,
       ...(breakColumnsSupported
         ? {
@@ -140,6 +145,28 @@ export default function AdminAttendance() {
           }
         : {}),
     };
+
+    const scheduleTimeChanged = Object.prototype.hasOwnProperty.call(patch, "scheduled_start") || Object.prototype.hasOwnProperty.call(patch, "scheduled_end");
+    if (scheduleTimeChanged && nextScheduledStart && nextScheduledEnd) {
+      const checkIn = new Date(`${date}T${nextScheduledStart}:00`);
+      const checkOut = new Date(`${date}T${nextScheduledEnd}:00`);
+      const diffMs = checkOut.getTime() - checkIn.getTime();
+      if (Number.isFinite(diffMs) && diffMs > 0) {
+        payload.check_in_at = checkIn.toISOString();
+        payload.check_out_at = checkOut.toISOString();
+        payload.manual_work_hours = Number((diffMs / 3600000).toFixed(2));
+      }
+    }
+
+    if (typeof patch.manual_work_hours === "number") {
+      payload.check_in_at = new Date(`${date}T09:00:00`).toISOString();
+      payload.check_out_at = new Date(`${date}T17:00:00`).toISOString();
+      if (breakColumnsSupported) {
+        (payload as any).break_minutes = 0;
+        (payload as any).break_started_at = null;
+        (payload as any).break_selected_minutes = null;
+      }
+    }
 
     const { error } = await supabase.from("attendance_entries").upsert(payload, { onConflict: "company_id,user_id,work_date" });
     setSaving(null);
@@ -156,10 +183,10 @@ export default function AdminAttendance() {
     setBulkEmployee(employee);
     setBulkFromDate(today());
     setBulkToDate(today());
-    setBulkCheckinTime("09:00");
-    setBulkCheckoutTime(new Date().toTimeString().slice(0, 5));
-    setSkipSaturday(false);
-    setSkipSunday(false);
+    setBulkEmploymentType("full_time");
+    setBulkWorkingHours("9");
+    setSkipSaturday(true);
+    setSkipSunday(true);
     setBulkDialogOpen(true);
   };
 
@@ -172,6 +199,25 @@ export default function AdminAttendance() {
       start.setDate(start.getDate() + 1);
     }
     return range;
+  };
+
+  const isWeekend = (workDate: string) => {
+    const day = new Date(`${workDate}T00:00:00`).getDay();
+    return day === 0 || day === 6;
+  };
+  const getDisplayCheckIn = (row: AttendanceRow) => {
+    if (row.check_in_at) return new Date(row.check_in_at).toLocaleString();
+    if (typeof row.manual_work_hours === "number" && row.manual_work_hours > 0) {
+      return new Date(`${row.work_date}T09:00:00`).toLocaleString();
+    }
+    return "-";
+  };
+  const getDisplayCheckOut = (row: AttendanceRow) => {
+    if (row.check_out_at) return new Date(row.check_out_at).toLocaleString();
+    if (typeof row.manual_work_hours === "number" && row.manual_work_hours > 0) {
+      return new Date(`${row.work_date}T17:00:00`).toLocaleString();
+    }
+    return "-";
   };
 
   const getReportRange = (preset: ReportPreset) => {
@@ -200,7 +246,6 @@ export default function AdminAttendance() {
 
     setBulkSaving(true);
     const userId = (await supabase.auth.getUser()).data.user?.id ?? null;
-    const now = new Date();
     const workDates = getDateRange(bulkFromDate, bulkToDate).filter((workDate) => {
       const day = new Date(`${workDate}T00:00:00`).getDay();
       if (skipSaturday && day === 6) return false;
@@ -214,17 +259,22 @@ export default function AdminAttendance() {
       return;
     }
 
+    const resolvedWorkingHours = bulkEmploymentType === "full_time" ? "9" : bulkWorkingHours;
+    const parsedWorkingHours = Number(resolvedWorkingHours);
+    if (!Number.isFinite(parsedWorkingHours) || parsedWorkingHours <= 0 || parsedWorkingHours > 24) {
+      setBulkSaving(false);
+      toast({ title: "Invalid working hours", description: "Working hours must be between 0.5 and 24.", variant: "destructive" });
+      return;
+    }
+
     const payload = workDates.map((workDate) => {
-      const requestedCheckin = new Date(`${workDate}T${bulkCheckinTime}:00`);
-      const requested = new Date(`${workDate}T${bulkCheckoutTime}:00`);
-      const checkinAt = requestedCheckin > now ? now : requestedCheckin;
-      const checkoutAt = requested > now ? now : requested;
       return {
         company_id: companyId,
         user_id: bulkEmployee.user_id,
         work_date: workDate,
-        check_in_at: checkinAt.toISOString(),
-        check_out_at: checkoutAt.toISOString(),
+        check_in_at: new Date(`${workDate}T09:00:00`).toISOString(),
+        check_out_at: new Date(`${workDate}T17:00:00`).toISOString(),
+        manual_work_hours: parsedWorkingHours,
         updated_by: userId,
       };
     });
@@ -256,7 +306,7 @@ export default function AdminAttendance() {
     setReportLoading(true);
     const { data, error } = await supabase
       .from("attendance_entries")
-      .select("id,user_id,work_date,scheduled_start,scheduled_end,check_in_at,check_out_at,break_minutes,break_started_at,break_selected_minutes")
+      .select("id,user_id,work_date,scheduled_start,scheduled_end,check_in_at,check_out_at,break_minutes,break_started_at,break_selected_minutes,manual_work_hours")
       .eq("company_id", companyId)
       .eq("user_id", reportEmployeeId)
       .gte("work_date", range.from)
@@ -296,10 +346,21 @@ export default function AdminAttendance() {
 
   const reportSummary = useMemo(() => {
     const range = getReportRange(reportPreset);
-    const totalDays = getDateRange(range.from, range.to).length;
-    const presentDays = reportRows.filter((row) => row.check_in_at || row.check_out_at).length;
-    const completeDays = reportRows.filter((row) => row.check_in_at && row.check_out_at).length;
+    const totalDays = getDateRange(range.from, range.to).filter((workDate) => !isWeekend(workDate)).length;
+    const isPresent = (row: AttendanceRow) =>
+      !!row.check_in_at ||
+      !!row.check_out_at ||
+      (typeof row.manual_work_hours === "number" && row.manual_work_hours > 0);
+    const presentDays = reportRows.filter((row) => !isWeekend(row.work_date) && isPresent(row)).length;
+    const completeDays = reportRows.filter((row) => {
+      if (isWeekend(row.work_date)) return false;
+      if (typeof row.manual_work_hours === "number" && row.manual_work_hours > 0) return true;
+      return !!row.check_in_at && !!row.check_out_at;
+    }).length;
     const totalHours = reportRows.reduce((sum, row) => {
+      if (typeof row.manual_work_hours === "number" && row.manual_work_hours > 0) {
+        return sum + row.manual_work_hours;
+      }
       if (!row.check_in_at || !row.check_out_at) return sum;
       const diff = new Date(row.check_out_at).getTime() - new Date(row.check_in_at).getTime();
       return diff > 0 ? sum + diff / 3600000 : sum;
@@ -318,7 +379,9 @@ export default function AdminAttendance() {
       .sort((a, b) => a.work_date.localeCompare(b.work_date))
       .map((row) => {
         let hours = 0;
-        if (row.check_in_at && row.check_out_at) {
+        if (typeof row.manual_work_hours === "number" && row.manual_work_hours > 0) {
+          hours = Number(row.manual_work_hours.toFixed(2));
+        } else if (row.check_in_at && row.check_out_at) {
           const diff = new Date(row.check_out_at).getTime() - new Date(row.check_in_at).getTime();
           if (diff > 0) hours = Number((diff / 3600000).toFixed(2));
         }
@@ -378,11 +441,32 @@ export default function AdminAttendance() {
                   onBlur={(e) => updateEntry(selectedEmployee.user_id, { scheduled_end: e.target.value || null })}
                 />
               </div>
+              <div className="grid md:grid-cols-2 gap-2">
+                <Input
+                  type="number"
+                  step="0.5"
+                  min={0.5}
+                  max={24}
+                  defaultValue={selectedEntry?.manual_work_hours ?? ""}
+                  placeholder="Manual working hours"
+                  onBlur={(e) => {
+                    const value = e.target.value.trim();
+                    if (!value) return;
+                    const parsed = Number(value);
+                    if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 24) {
+                      toast({ title: "Invalid working hours", description: "Working hours must be between 0.5 and 24.", variant: "destructive" });
+                      return;
+                    }
+                    void updateEntry(selectedEmployee.user_id, { manual_work_hours: parsed });
+                  }}
+                />
+              </div>
               <div>
                 <Button variant="outline" size="sm" onClick={() => openBulkDialog(selectedEmployee)}>Update Attendance</Button>
               </div>
               <p className="text-xs text-muted-foreground">
                 In: {selectedEntry?.check_in_at ? new Date(selectedEntry.check_in_at).toLocaleString() : "-"} | Out: {selectedEntry?.check_out_at ? new Date(selectedEntry.check_out_at).toLocaleString() : "-"}
+                {typeof selectedEntry?.manual_work_hours === "number" ? ` | Manual hours: ${selectedEntry.manual_work_hours}` : ""}
                 {saving === selectedEmployee.user_id ? " | Saving..." : ""}
               </p>
             </div>
@@ -409,9 +493,9 @@ export default function AdminAttendance() {
                 </option>
               ))}
             </select>
-            <Button variant="outline" className={reportPreset === "weekly" ? "wf-filter-btn-active" : "wf-filter-btn"} onClick={() => setReportPreset("weekly")}>Weekly</Button>
-            <Button variant="outline" className={reportPreset === "monthly" ? "wf-filter-btn-active" : "wf-filter-btn"} onClick={() => setReportPreset("monthly")}>Monthly</Button>
-            <Button variant="outline" className={reportPreset === "quarterly" ? "wf-filter-btn-active" : "wf-filter-btn"} onClick={() => setReportPreset("quarterly")}>3 Months</Button>
+            <Button variant={reportPreset === "weekly" ? "default" : "outline"} className={reportPreset === "weekly" ? "bg-primary text-primary-foreground hover:bg-primary/90" : "text-foreground"} onClick={() => setReportPreset("weekly")}>Weekly</Button>
+            <Button variant={reportPreset === "monthly" ? "default" : "outline"} className={reportPreset === "monthly" ? "bg-primary text-primary-foreground hover:bg-primary/90" : "text-foreground"} onClick={() => setReportPreset("monthly")}>Monthly</Button>
+            <Button variant={reportPreset === "quarterly" ? "default" : "outline"} className={reportPreset === "quarterly" ? "bg-primary text-primary-foreground hover:bg-primary/90" : "text-foreground"} onClick={() => setReportPreset("quarterly")}>3 Months</Button>
           </div>
 
           <div className="grid md:grid-cols-4 gap-2 items-end">
@@ -423,7 +507,7 @@ export default function AdminAttendance() {
               <p className="text-xs text-muted-foreground">Custom to</p>
               <Input type="date" max={today()} value={customToDate} onChange={(e) => setCustomToDate(e.target.value)} />
             </div>
-            <Button variant="outline" className={reportPreset === "custom" ? "wf-filter-btn-active" : "wf-filter-btn"} onClick={() => setReportPreset("custom")}>Use Custom</Button>
+            <Button variant={reportPreset === "custom" ? "default" : "outline"} className={reportPreset === "custom" ? "bg-primary text-primary-foreground hover:bg-primary/90" : "text-foreground"} onClick={() => setReportPreset("custom")}>Use Custom</Button>
             <Button onClick={fetchReport} disabled={reportLoading}>{reportLoading ? "Loading..." : "Refresh Report"}</Button>
           </div>
 
@@ -445,6 +529,7 @@ export default function AdminAttendance() {
                     <th className="text-left p-2">Check-in</th>
                     <th className="text-left p-2">Check-out</th>
                     <th className="text-left p-2">Break</th>
+                    <th className="text-left p-2">Manual Hours</th>
                     <th className="text-left p-2">Status</th>
                   </tr>
                 </thead>
@@ -452,18 +537,19 @@ export default function AdminAttendance() {
                   {reportRows.map((row) => (
                     <tr key={row.id} className="border-t">
                       <td className="p-2">{new Date(row.work_date).toLocaleDateString()}</td>
-                      <td className="p-2">{row.check_in_at ? new Date(row.check_in_at).toLocaleString() : "-"}</td>
-                      <td className="p-2">{row.check_out_at ? new Date(row.check_out_at).toLocaleString() : "-"}</td>
+                      <td className="p-2">{getDisplayCheckIn(row)}</td>
+                      <td className="p-2">{getDisplayCheckOut(row)}</td>
                       <td className="p-2">
                         {(row.break_minutes ?? 0) > 0 ? `${row.break_minutes} min` : "-"}
                         {row.break_started_at ? ` (Active ${row.break_selected_minutes ?? 0}m)` : ""}
                       </td>
-                      <td className="p-2">{row.check_in_at || row.check_out_at ? "Present" : "Absent"}</td>
+                      <td className="p-2">{typeof row.manual_work_hours === "number" ? row.manual_work_hours : "-"}</td>
+                      <td className="p-2">{row.check_in_at || row.check_out_at || (typeof row.manual_work_hours === "number" && row.manual_work_hours > 0) ? "Present" : "Absent"}</td>
                     </tr>
                   ))}
                   {reportRows.length === 0 && (
                     <tr>
-                      <td className="p-3 text-muted-foreground" colSpan={5}>No attendance found for selected range.</td>
+                      <td className="p-3 text-muted-foreground" colSpan={6}>No attendance found for selected range.</td>
                     </tr>
                   )}
                 </tbody>
@@ -512,12 +598,40 @@ export default function AdminAttendance() {
               <Input type="date" value={bulkToDate} max={today()} onChange={(e) => setBulkToDate(e.target.value)} />
             </div>
             <div className="space-y-2 sm:col-span-2">
-              <p className="text-sm font-medium">Check-in time</p>
-              <Input type="time" value={bulkCheckinTime} onChange={(e) => setBulkCheckinTime(e.target.value)} />
+              <p className="text-sm font-medium">Employment Type</p>
+              <div className="flex flex-wrap items-center gap-4 text-sm">
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={bulkEmploymentType === "full_time"}
+                    onChange={() => {
+                      setBulkEmploymentType("full_time");
+                      setBulkWorkingHours("9");
+                    }}
+                  />
+                  Full Time
+                </label>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={bulkEmploymentType === "part_time"}
+                    onChange={() => setBulkEmploymentType("part_time")}
+                  />
+                  Part Time
+                </label>
+              </div>
             </div>
             <div className="space-y-2 sm:col-span-2">
-              <p className="text-sm font-medium">Check-out time</p>
-              <Input type="time" value={bulkCheckoutTime} onChange={(e) => setBulkCheckoutTime(e.target.value)} />
+              <p className="text-sm font-medium">Working Hours</p>
+              <Input
+                type="number"
+                step="0.5"
+                min={0.5}
+                max={24}
+                value={bulkEmploymentType === "full_time" ? "9" : bulkWorkingHours}
+                disabled={bulkEmploymentType === "full_time"}
+                onChange={(e) => setBulkWorkingHours(e.target.value)}
+              />
             </div>
             <div className="space-y-2 sm:col-span-2">
               <p className="text-sm font-medium">Skip days</p>

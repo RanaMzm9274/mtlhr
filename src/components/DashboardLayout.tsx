@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Outlet, useNavigate } from "react-router-dom";
+import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import {
@@ -21,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import { AppLogo } from "@/components/AppLogo";
 import { useToast } from "@/hooks/use-toast";
 import { Input } from "@/components/ui/input";
+import { PortalSearchProvider } from "@/contexts/PortalSearchContext";
 
 const adminItems = [
   { title: "Dashboard", url: "", icon: LayoutDashboard },
@@ -184,30 +185,44 @@ function AppSidebar() {
 }
 
 export default function DashboardLayout() {
+  const location = useLocation();
+  const [searchTerm, setSearchTerm] = useState("");
+
+  useEffect(() => {
+    setSearchTerm("");
+  }, [location.pathname]);
+
   return (
-    <SidebarProvider>
-      <div className="min-h-screen flex w-full bg-[#F8F9FB] text-slate-900">
-        <AppSidebar />
-        <div className="flex-1 flex flex-col min-w-0">
-          <header className="h-20 bg-white border-b border-slate-200 flex items-center justify-between px-6 md:px-8 shrink-0">
-            <div className="flex items-center gap-3">
-              <SidebarTrigger />
-              <div className="hidden md:flex items-center gap-3 bg-slate-100 px-4 py-2 rounded-xl w-80">
-                <Search size={16} className="text-slate-400" />
-                <Input placeholder="Search..." className="h-auto border-0 bg-transparent p-0 shadow-none focus-visible:ring-0 text-sm" />
+    <PortalSearchProvider value={{ searchTerm, setSearchTerm }}>
+      <SidebarProvider>
+        <div className="min-h-screen flex w-full bg-[#F8F9FB] text-slate-900">
+          <AppSidebar />
+          <div className="flex-1 flex flex-col min-w-0">
+            <header className="h-20 bg-white border-b border-slate-200 flex items-center justify-between px-6 md:px-8 shrink-0">
+              <div className="flex items-center gap-3">
+                <SidebarTrigger />
+                <div className="hidden md:flex items-center gap-3 bg-slate-100 px-4 py-2 rounded-xl w-80">
+                  <Search size={16} className="text-slate-400" />
+                  <Input
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    placeholder="Search..."
+                    className="h-auto border-0 bg-transparent p-0 shadow-none focus-visible:ring-0 text-sm"
+                  />
+                </div>
               </div>
-            </div>
-            <button className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full relative">
-              <Bell size={20} />
-              <span className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full border-2 border-white"></span>
-            </button>
-          </header>
-          <main className="flex-1 p-6 md:p-8 overflow-auto">
-            <Outlet />
-          </main>
+              <button className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full relative">
+                <Bell size={20} />
+                <span className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full border-2 border-white"></span>
+              </button>
+            </header>
+            <main className="flex-1 p-6 md:p-8 overflow-auto">
+              <Outlet />
+            </main>
+          </div>
         </div>
-      </div>
-    </SidebarProvider>
+      </SidebarProvider>
+    </PortalSearchProvider>
   );
 }
 

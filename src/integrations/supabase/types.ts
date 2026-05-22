@@ -56,7 +56,9 @@ export type Database = {
           avatar_url: string | null
           company_id: string | null
           created_at: string
+          date_of_birth: string | null
           email: string
+          employment_type: string
           gender: string | null
           id: string
           id_passport: string | null
@@ -68,13 +70,17 @@ export type Database = {
           status: string
           updated_at: string
           user_id: string
+          website: string | null
+          working_hours: number | null
         }
         Insert: {
           address?: string | null
           avatar_url?: string | null
           company_id?: string | null
           created_at?: string
+          date_of_birth?: string | null
           email?: string
+          employment_type?: string
           gender?: string | null
           id?: string
           id_passport?: string | null
@@ -86,13 +92,17 @@ export type Database = {
           status?: string
           updated_at?: string
           user_id: string
+          website?: string | null
+          working_hours?: number | null
         }
         Update: {
           address?: string | null
           avatar_url?: string | null
           company_id?: string | null
           created_at?: string
+          date_of_birth?: string | null
           email?: string
+          employment_type?: string
           gender?: string | null
           id?: string
           id_passport?: string | null
@@ -104,6 +114,8 @@ export type Database = {
           status?: string
           updated_at?: string
           user_id?: string
+          website?: string | null
+          working_hours?: number | null
         }
         Relationships: []
       }
@@ -276,6 +288,7 @@ export type Database = {
           company_id: string
           created_at: string
           id: string
+          manual_work_hours: number | null
           scheduled_end: string | null
           scheduled_start: string | null
           updated_at: string
@@ -289,6 +302,7 @@ export type Database = {
           company_id: string
           created_at?: string
           id?: string
+          manual_work_hours?: number | null
           scheduled_end?: string | null
           scheduled_start?: string | null
           updated_at?: string
@@ -302,6 +316,7 @@ export type Database = {
           company_id?: string
           created_at?: string
           id?: string
+          manual_work_hours?: number | null
           scheduled_end?: string | null
           scheduled_start?: string | null
           updated_at?: string

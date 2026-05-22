@@ -16,6 +16,19 @@ const restoreSpaPathFrom404Redirect = () => {
   window.history.replaceState({}, "", nextPath);
 };
 
+const normalizeLegacyHashRoute = () => {
+  const { hash, pathname, search } = window.location;
+  if (!hash || !hash.startsWith("#/")) return;
+  if (hash.includes("access_token=")) return;
+
+  const legacyPath = hash.slice(1);
+  const nextPath = `${legacyPath}${search || ""}`;
+  if (pathname !== legacyPath) {
+    window.history.replaceState({}, "", nextPath);
+  }
+};
+
 restoreSpaPathFrom404Redirect();
+normalizeLegacyHashRoute();
 
 createRoot(document.getElementById("root")!).render(<App />);

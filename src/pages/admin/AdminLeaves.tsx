@@ -23,6 +23,7 @@ import { removeUndefined } from "@/lib/utils";
 import { DocumentPreviewDialog } from "@/components/DocumentPreviewDialog";
 import { indexProfilesByUserId, normalizeDocumentRecord, normalizeLeaveRecord, type DocumentRecord, type LeaveRecord, type ProfileRecord } from "@/lib/hrPortal";
 import { SUPABASE_REQUEST_TIMEOUT_MS, withTimeoutFallback } from "@/lib/async";
+import { usePortalSearch } from "@/contexts/PortalSearchContext";
 
 interface LeaveRequest extends LeaveRecord {
   employee: ProfileRecord | null;
@@ -36,6 +37,7 @@ const PAGE_SIZE = 10;
 
 export default function AdminLeaves() {
   const { toast } = useToast();
+  const { searchTerm } = usePortalSearch();
   const [leaves, setLeaves] = useState<LeaveRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<"all" | "pending" | "approved" | "rejected">("all");
@@ -132,7 +134,19 @@ export default function AdminLeaves() {
   };
 
   const processed = useMemo(() => {
-    const filtered = filter === "all" ? [...leaves] : leaves.filter((leave) => leave.status === filter);
+    let filtered = filter === "all" ? [...leaves] : leaves.filter((leave) => leave.status === filter);
+    const query = searchTerm.trim().toLowerCase();
+    if (query) {
+      filtered = filtered.filter((leave) => {
+        const employee = `${leave.employee?.name || ""} ${leave.employee?.email || ""}`.toLowerCase();
+        return (
+          employee.includes(query) ||
+          leave.leave_type.toLowerCase().includes(query) ||
+          leave.status.toLowerCase().includes(query) ||
+          leave.reason.toLowerCase().includes(query)
+        );
+      });
+    }
     filtered.sort((a, b) => {
       const aValue = sortKey === "employee"
         ? (a.employee?.name || a.employee?.email || "").toLowerCase()
@@ -145,7 +159,7 @@ export default function AdminLeaves() {
     });
 
     return filtered;
-  }, [filter, leaves, sortDir, sortKey]);
+  }, [filter, leaves, sortDir, sortKey, searchTerm]);
 
   const totalPages = Math.max(1, Math.ceil(processed.length / PAGE_SIZE));
   const paged = processed.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);

@@ -347,6 +347,36 @@ export default function EmployeeDashboard() {
     const endMs = attendance?.check_out_at ? new Date(attendance.check_out_at).getTime() : nowTick;
     return formatDuration(endMs - startMs);
   }, [attendance?.check_in_at, attendance?.check_out_at, attendanceRows, nowTick]);
+  const shiftDurationMs = useMemo(() => {
+    const openHistoryRow = [...attendanceRows]
+      .reverse()
+      .find((row) => row.check_in_at && !row.check_out_at);
+    const startIso = attendance?.check_in_at || openHistoryRow?.check_in_at;
+    if (!startIso) return 0;
+    const startMs = new Date(startIso).getTime();
+    const endMs = attendance?.check_out_at ? new Date(attendance.check_out_at).getTime() : nowTick;
+    return Math.max(0, endMs - startMs);
+  }, [attendance?.check_in_at, attendance?.check_out_at, attendanceRows, nowTick]);
+  const targetShiftHours = useMemo(() => {
+    const profileEmploymentType = (profile as any)?.employment_type;
+    const partTimeHours = Number((profile as any)?.working_hours);
+    if (profileEmploymentType === "part_time" && Number.isFinite(partTimeHours) && partTimeHours > 0) {
+      return partTimeHours;
+    }
+    return 9;
+  }, [profile]);
+  const employmentLabel = useMemo(() => {
+    const profileEmploymentType = (profile as any)?.employment_type;
+    if (profileEmploymentType === "part_time") {
+      return `Part Time (${targetShiftHours}h)`;
+    }
+    return "Full Time (9h)";
+  }, [profile, targetShiftHours]);
+  const shiftProgress = useMemo(() => {
+    const totalTargetMs = targetShiftHours * 60 * 60 * 1000;
+    if (!totalTargetMs) return 0;
+    return Math.min(100, Math.round((shiftDurationMs / totalTargetMs) * 100));
+  }, [shiftDurationMs, targetShiftHours]);
 
   const heroDate = useMemo(
     () => new Date(nowTick).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" }),
@@ -362,36 +392,42 @@ export default function EmployeeDashboard() {
       <div>
         <h1 className="text-2xl font-bold">Welcome, {profile?.name || "Employee"}</h1>
         <p className="text-muted-foreground">Your personal dashboard</p>
+        <p className="text-sm text-slate-600 mt-1">
+          Employment Type: <span className="font-semibold text-slate-900">{employmentLabel}</span>
+        </p>
       </div>
 
       <Card className="overflow-hidden rounded-3xl">
-        <CardContent className="relative p-8">
-          <div className="absolute right-0 top-0 h-56 w-56 rounded-full bg-slate-50 -mr-20 -mt-20" />
+        <CardContent className="relative p-5">
+          <div className="absolute right-0 top-0 h-32 w-32 rounded-full bg-slate-50 -mr-12 -mt-12" />
           <div className="relative z-10 flex flex-col md:flex-row md:items-center md:justify-between gap-5">
             <div>
-              <p className="text-[32px] text-slate-600 font-semibold mb-1">{heroDate}</p>
-              <h2 className="text-6xl leading-none font-black tracking-tight">{shiftDurationText}</h2>
-              <div className="mt-4 flex items-center gap-2 text-base text-slate-500">
-                <MapPin size={16} />
+              <p className="text-[20px] text-slate-600 font-semibold mb-1">{heroDate}</p>
+              <h2 className="text-[56px] leading-none font-black tracking-tight">{shiftDurationText}</h2>
+              <div className="mt-2 flex items-center gap-2 text-sm text-slate-500">
+                <MapPin size={14} />
                 <span>Remote - London Office</span>
               </div>
-              <p className="mt-3 text-sm font-semibold text-slate-700">
+              <p className="mt-2 text-xs font-semibold text-slate-700">
                 {attendance?.check_in_at
                   ? attendance?.check_out_at
                     ? "Shift completed"
                     : "Shift in progress"
                   : "Not clocked in"}
               </p>
+              <p className="mt-1 text-xs text-slate-500">
+                Shift target: {targetShiftHours}h {((profile as any)?.employment_type === "part_time") ? "(part-time working hours)" : "(full-time including break)"} | Progress: {shiftProgress}%
+              </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <Button className="h-14 px-8 rounded-2xl text-xl font-bold" disabled={busy || !!attendance?.check_in_at} onClick={() => upsertAttendance("in")}>
-                <Clock3 className="mr-2 h-6 w-6" /> Clock In
+              <Button className="h-10 px-5 rounded-xl text-base font-bold" disabled={busy || !!attendance?.check_in_at} onClick={() => upsertAttendance("in")}>
+                <Clock3 className="mr-2 h-4 w-4" /> Clock In
               </Button>
-              <Button variant="outline" className="h-14 px-6 rounded-2xl text-lg font-semibold" disabled={busy || !attendance?.check_in_at || !!attendance?.check_out_at} onClick={() => upsertAttendance("out")}>
-                <LogOut className="mr-2 h-5 w-5" /> Check Out
+              <Button variant="outline" className="h-10 px-4 rounded-xl text-sm font-semibold" disabled={busy || !attendance?.check_in_at || !!attendance?.check_out_at} onClick={() => upsertAttendance("out")}>
+                <LogOut className="mr-2 h-4 w-4" /> Check Out
               </Button>
               <select
-                className="h-14 rounded-2xl border bg-background px-4 text-base"
+                className="h-10 rounded-xl border bg-background px-3 text-sm"
                 value={selectedBreakMinutes}
                 disabled={busy || onBreak || remainingBreakMinutes === 0}
                 onChange={(e) => setSelectedBreakMinutes(Number(e.target.value))}
@@ -404,13 +440,13 @@ export default function EmployeeDashboard() {
               </select>
               <Button
                 variant="secondary"
-                className="h-14 px-6 rounded-2xl text-lg font-semibold"
+                className="h-10 px-4 rounded-xl text-sm font-semibold"
                 disabled={busy || !attendance?.check_in_at || !!attendance?.check_out_at || (!onBreak && remainingBreakMinutes === 0)}
                 onClick={() => void toggleBreak()}
               >
                 {onBreak ? "End Break" : "Start Break"}
               </Button>
-              <p className="w-full text-sm text-slate-600 mt-1">
+              <p className="w-full text-xs text-slate-600 mt-1">
                 Break limit: 60 min | Remaining: {remainingBreakMinutes} min
                 {onBreak && activeBreakMinutes ? ` | Active: ${activeBreakMinutes} min` : ""}
               </p>

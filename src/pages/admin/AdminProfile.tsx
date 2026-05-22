@@ -16,11 +16,12 @@ export default function AdminProfile() {
   const { user } = useAuth();
   const { toast } = useToast();
   const [profile, setProfile] = useState({
-    name: "", email: "", phone: "", gender: "", position: "", id_passport: "", license: "", avatar_url: "",
+    name: "", email: "", phone: "", gender: "", position: "", address: "", website: "", license: "", avatar_url: "",
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [uploadingImage, setUploadingImage] = useState(false);
+  const [uploadingExtraDoc, setUploadingExtraDoc] = useState(false);
 
   useEffect(() => {
     if (!user) {
@@ -47,7 +48,8 @@ export default function AdminProfile() {
           phone: normalized.phone,
           gender: normalized.gender,
           position: normalized.position,
-          id_passport: normalized.id_passport,
+          address: ((data as any[])?.[0]?.address as string | undefined) ?? "",
+          website: ((data as any[])?.[0]?.website as string | undefined) ?? "",
           license: normalized.license,
           avatar_url: normalized.avatar_url || "",
         });
@@ -71,11 +73,13 @@ export default function AdminProfile() {
           phone: profile.phone,
           gender: profile.gender,
           position: profile.position,
-          id_passport: profile.id_passport,
+          id_passport: "",
           license: profile.license,
           avatar_url: profile.avatar_url || null,
           profile_completed: false,
         }),
+        address: profile.address || null,
+        website: profile.website || null,
         status: "active",
       } as any);
       const savedRow = await saveProfileRecord(supabase, payload as any);
@@ -86,7 +90,8 @@ export default function AdminProfile() {
         phone: normalized.phone,
         gender: normalized.gender,
         position: normalized.position,
-        id_passport: normalized.id_passport,
+        address: ((savedRow as any)?.address as string | undefined) ?? "",
+        website: ((savedRow as any)?.website as string | undefined) ?? "",
         license: normalized.license,
         avatar_url: normalized.avatar_url || "",
       });
@@ -116,17 +121,54 @@ export default function AdminProfile() {
     }
   };
 
+  const handleAdditionalDocumentUpload = async (file?: File) => {
+    if (!user || !file) return;
+    setUploadingExtraDoc(true);
+    try {
+      const ext = file.name.split(".").pop()?.toLowerCase() || "pdf";
+      const path = `${user.id}/profile-docs/license-${Date.now()}.${ext}`;
+      const { error: uploadError } = await supabase.storage.from("documents").upload(path, file, { upsert: true });
+      if (uploadError) throw uploadError;
+
+      const { error: insertError } = await supabase.from("documents").insert({
+        user_id: user.id,
+        file_url: path,
+        file_name: file.name,
+        file_type: ext,
+        category: "certificate",
+        uploaded_at: new Date().toISOString(),
+      } as any);
+      if (insertError) throw insertError;
+
+      toast({ title: "Document uploaded", description: "Additional document saved successfully." });
+    } catch (err: any) {
+      toast({ title: "Upload failed", description: err.message, variant: "destructive" });
+    } finally {
+      setUploadingExtraDoc(false);
+    }
+  };
+
   if (loading) return <div className="flex justify-center py-12"><Loader2 className="animate-spin h-8 w-8 text-muted-foreground" /></div>;
 
   return (
-    <div className="space-y-6 animate-fade-in max-w-2xl">
+    <div className="space-y-6 animate-fade-in">
       <div>
         <h1 className="text-2xl font-bold">My Profile</h1>
         <p className="text-muted-foreground">Update your personal information</p>
       </div>
 
-      <Card>
-        <CardContent className="pt-6">
+      <Card className="overflow-hidden rounded-3xl">
+        <CardContent className="pt-8 pb-8">
+          <div className="mb-6 flex flex-col items-center gap-3">
+            {profile.avatar_url ? (
+              <img src={profile.avatar_url} alt="Profile" className="h-20 w-20 rounded-full object-cover border" />
+            ) : (
+              <div className="h-20 w-20 rounded-full bg-blue-600 text-white flex items-center justify-center text-2xl font-bold border">
+                {(profile.name || "A").trim().charAt(0).toUpperCase()}
+              </div>
+            )}
+            <Button variant="outline" className="rounded-xl">Edit Profile</Button>
+          </div>
           <form onSubmit={handleSave} className="space-y-4">
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
@@ -136,10 +178,6 @@ export default function AdminProfile() {
               <div className="space-y-2">
                 <Label>Email</Label>
                 <Input value={profile.email} disabled className="bg-muted" />
-              </div>
-              <div className="space-y-2">
-                <Label>ID / Passport Number</Label>
-                <Input value={profile.id_passport} onChange={(e) => setProfile({ ...profile, id_passport: e.target.value })} placeholder="Enter ID or passport number" />
               </div>
               <div className="space-y-2">
                 <Label>Phone</Label>
@@ -159,11 +197,42 @@ export default function AdminProfile() {
               </div>
               <div className="space-y-2">
                 <Label>Position</Label>
-                <Input value={profile.position} onChange={(e) => setProfile({ ...profile, position: e.target.value })} placeholder="e.g. Managing Director" />
+                <Select value={profile.position} onValueChange={(v) => setProfile({ ...profile, position: v })}>
+                  <SelectTrigger><SelectValue placeholder="Select position" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Director">Director</SelectItem>
+                    <SelectItem value="Business Manager">Business Manager</SelectItem>
+                    <SelectItem value="Project Manager">Project Manager</SelectItem>
+                    <SelectItem value="Team Lead">Team Lead</SelectItem>
+                    <SelectItem value="Hiring Manager">Hiring Manager</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Address</Label>
+                <Input value={profile.address} onChange={(e) => setProfile({ ...profile, address: e.target.value })} placeholder="Enter address" />
+              </div>
+              <div className="space-y-2 sm:col-span-2">
+                <Label>Website</Label>
+                <Input value={profile.website} onChange={(e) => setProfile({ ...profile, website: e.target.value })} placeholder="https://example.com" />
               </div>
               <div className="space-y-2 sm:col-span-2">
                 <Label>License / Certification</Label>
                 <Input value={profile.license} onChange={(e) => setProfile({ ...profile, license: e.target.value })} placeholder="e.g. UK Driving License, CSCS Card" />
+              </div>
+              <div className="space-y-2 sm:col-span-2">
+                <Label>Additional Document</Label>
+                <Input
+                  type="file"
+                  accept=".pdf,.jpg,.jpeg,.png,.doc,.docx"
+                  disabled={uploadingExtraDoc}
+                  onChange={(e) => handleAdditionalDocumentUpload(e.target.files?.[0])}
+                />
+                {uploadingExtraDoc && (
+                  <p className="text-xs text-muted-foreground flex items-center gap-1">
+                    <Loader2 className="h-3 w-3 animate-spin" /> Uploading document...
+                  </p>
+                )}
               </div>
               <div className="space-y-2 sm:col-span-2">
                 <Label>Profile Picture</Label>

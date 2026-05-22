@@ -144,7 +144,7 @@ export default function EmployeeDocuments() {
   };
 
   const categoryLabel = (cat: string) => {
-    const map: Record<string, string> = { id_proof: "Passport", cv: "Share Code", certificate: "Work Permit" };
+    const map: Record<string, string> = { id_proof: "Passport", cv: "Share Code", certificate: "Work Permit", other: "Other" };
     return map[cat] || cat;
   };
 
@@ -171,6 +171,7 @@ export default function EmployeeDocuments() {
                 <SelectItem value="id_proof">Passport</SelectItem>
                 <SelectItem value="cv">Share code</SelectItem>
                 <SelectItem value="certificate">Work Permit</SelectItem>
+                <SelectItem value="other">Other</SelectItem>
               </SelectContent>
             </Select>
             <input ref={fileRef} type="file" accept=".pdf,.jpg,.jpeg,.png" onChange={handleUpload} className="hidden" />

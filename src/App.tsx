@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { HashRouter, Route, Routes, Navigate, useLocation, useParams } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { BrowserRouter, Route, Routes, Navigate, useLocation, useParams } from "react-router-dom";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -18,12 +19,16 @@ import EmployeeDashboard from "@/pages/employee/EmployeeDashboard";
 import EmployeeProfile from "@/pages/employee/EmployeeProfile";
 import EmployeeDocuments from "@/pages/employee/EmployeeDocuments";
 import EmployeeLeave from "@/pages/employee/EmployeeLeave";
+import EmployeeOnboardingProfile from "@/pages/employee/EmployeeOnboardingProfile";
+import EmployeeOnboardingDocuments from "@/pages/employee/EmployeeOnboardingDocuments";
 import SettingsPage from "@/pages/SettingsPage";
 import NotFound from "@/pages/NotFound";
 import PendingApproval from "@/pages/PendingApproval";
 import SuperAdminCompanies from "@/pages/superadmin/SuperAdminCompanies";
 import { Loader2 } from "lucide-react";
 import { getBasePath } from "@/lib/basePath";
+import { supabase } from "@/integrations/supabase/client";
+import { getProfileCompletion, normalizeProfileRecord } from "@/lib/hrPortal";
 
 const queryClient = new QueryClient();
 
@@ -62,6 +67,67 @@ function ProtectedRoute({ children, requiredRole }: { children: React.ReactNode;
 function AppRoutes() {
   const { user, role, loading, companyStatus, companySlug } = useAuth();
   const location = useLocation();
+  const [onboardingLoading, setOnboardingLoading] = useState(false);
+  const [needsProfileOnboarding, setNeedsProfileOnboarding] = useState(false);
+  const [needsDocumentsOnboarding, setNeedsDocumentsOnboarding] = useState(false);
+  const [onboardingEvaluatedPath, setOnboardingEvaluatedPath] = useState("");
+  const requiredDocumentCategories = ["id_proof", "cv", "certificate"];
+
+  useEffect(() => {
+    let active = true;
+    const evaluateOnboarding = async () => {
+      if (!user || role !== "employee") {
+        if (!active) return;
+        setOnboardingLoading(false);
+        setNeedsProfileOnboarding(false);
+        setNeedsDocumentsOnboarding(false);
+        setOnboardingEvaluatedPath(location.pathname);
+        return;
+      }
+
+      setOnboardingLoading(true);
+      try {
+        const [{ data: profileRow }, { data: documentRows }] = await Promise.all([
+          supabase
+            .from("employee_profiles")
+            .select("*")
+            .eq("user_id", user.id)
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle(),
+          supabase
+            .from("documents")
+            .select("category")
+            .eq("user_id", user.id),
+        ]);
+
+        if (!active) return;
+        const normalizedProfile = normalizeProfileRecord(profileRow as any, user);
+        const profileDone = getProfileCompletion(normalizedProfile) === 100;
+        const uploaded = new Set(
+          ((documentRows as Array<{ category?: string }>) ?? [])
+            .map((row) => row.category)
+            .filter(Boolean) as string[],
+        );
+        const docsDone = requiredDocumentCategories.every((category) => uploaded.has(category));
+        setNeedsProfileOnboarding(!profileDone);
+        setNeedsDocumentsOnboarding(profileDone && !docsDone);
+        setOnboardingEvaluatedPath(location.pathname);
+      } catch {
+        if (!active) return;
+        setNeedsProfileOnboarding(true);
+        setNeedsDocumentsOnboarding(false);
+        setOnboardingEvaluatedPath(location.pathname);
+      } finally {
+        if (active) setOnboardingLoading(false);
+      }
+    };
+
+    void evaluateOnboarding();
+    return () => {
+      active = false;
+    };
+  }, [role, user, location.pathname]);
 
   if (loading) {
     return (
@@ -71,13 +137,6 @@ function AppRoutes() {
     );
   }
 
-  const defaultHome = role === "super_admin"
-    ? "/super-admin/companies"
-    : role === "admin"
-      ? companySlug ? `/${companySlug}` : "/pending-approval"
-      : companySlug ? `/${companySlug}/employee/dashboard` : "/login";
-
-  const pendingBlocked = !!user && role === "admin" && (companyStatus === "pending" || companyStatus === "rejected");
   const searchParams = new URLSearchParams(location.search);
   const inviteType = searchParams.get("type");
   const hasInviteQuery = (inviteType === "invite" || inviteType === "recovery") && (!!searchParams.get("token_hash") || !!searchParams.get("code"));
@@ -88,6 +147,38 @@ function AppRoutes() {
   if (hasInvitePayload && location.pathname !== "/set-password") {
     return <Navigate to={setPasswordTarget} replace />;
   }
+
+  const isSetPasswordRoute = location.pathname === "/set-password" || location.pathname === "/reset-password";
+
+  if (!isSetPasswordRoute && user && role === "employee" && companySlug) {
+    if (onboardingLoading || onboardingEvaluatedPath !== location.pathname) {
+      return (
+        <div className="min-h-screen flex items-center justify-center">
+          <Loader2 className="animate-spin h-8 w-8 text-primary" />
+        </div>
+      );
+    }
+
+    const onboardingProfilePath = `/${companySlug}/employee/onboarding/profile`;
+    const onboardingDocumentsPath = `/${companySlug}/employee/onboarding/documents`;
+    const requiredOnboardingPath = needsProfileOnboarding
+      ? onboardingProfilePath
+      : needsDocumentsOnboarding
+        ? onboardingDocumentsPath
+        : null;
+
+    if (requiredOnboardingPath && location.pathname !== requiredOnboardingPath) {
+      return <Navigate to={requiredOnboardingPath} replace />;
+    }
+  }
+
+  const defaultHome = role === "super_admin"
+    ? "/super-admin/companies"
+    : role === "admin"
+      ? companySlug ? `/${companySlug}` : "/pending-approval"
+      : companySlug ? `/${companySlug}/employee/dashboard` : "/login";
+
+  const pendingBlocked = !!user && role === "admin" && (companyStatus === "pending" || companyStatus === "rejected");
 
   const adminPath = (path: string) => {
     if (!companySlug) return "/pending-approval";
@@ -155,6 +246,8 @@ function AppRoutes() {
 
       <Route path="/:companySlug/employee" element={<ProtectedRoute requiredRole="employee"><DashboardLayout /></ProtectedRoute>}>
         <Route index element={<Navigate to="dashboard" replace />} />
+        <Route path="onboarding/profile" element={<EmployeeOnboardingProfile />} />
+        <Route path="onboarding/documents" element={<EmployeeOnboardingDocuments />} />
         <Route path="dashboard" element={<EmployeeDashboard />} />
         <Route path="profile" element={<EmployeeProfile />} />
         <Route path="documents" element={<EmployeeDocuments />} />
@@ -172,11 +265,11 @@ const App = () => (
     <TooltipProvider>
       <Toaster />
       <Sonner />
-      <HashRouter basename={getBasePath()}>
+      <BrowserRouter basename={getBasePath()}>
         <AuthProvider>
           <AppRoutes />
         </AuthProvider>
-      </HashRouter>
+      </BrowserRouter>
     </TooltipProvider>
   </QueryClientProvider>
 );

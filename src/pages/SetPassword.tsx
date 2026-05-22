@@ -1,14 +1,16 @@
 import { useEffect, useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { EmailOtpType, User } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Progress } from "@/components/ui/progress";
 import { Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { buildProfileUpsertPayload, normalizeProfileRecord, saveProfileRecord } from "@/lib/hrPortal";
 import { AppLogo } from "@/components/AppLogo";
 import { SUPABASE_REQUEST_TIMEOUT_MS, withTimeout } from "@/lib/async";
+import { getPasswordValidation, isStrongPassword, validateBusinessEmail } from "@/lib/validation";
 
 type InvitationMode = "auth-invite" | "legacy-token";
 
@@ -34,25 +36,33 @@ const buildInvitationFromUser = (user: User): InvitationState => {
 
 export default function SetPassword() {
   const [searchParams] = useSearchParams();
+  const location = useLocation();
   const navigate = useNavigate();
   const { toast } = useToast();
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [validating, setValidating] = useState(true);
+  const [validationError, setValidationError] = useState<string | null>(null);
+  const [pendingRecoveryVerification, setPendingRecoveryVerification] = useState(false);
+  const [recoveryVerificationNonce, setRecoveryVerificationNonce] = useState(0);
   const [invitation, setInvitation] = useState<InvitationState | null>(null);
   const token = searchParams.get("token");
   const inviteType = searchParams.get("type");
   const tokenHash = searchParams.get("token_hash");
   const authCode = searchParams.get("code");
+  const hashParams = new URLSearchParams(location.hash.replace(/^#/, ""));
+  const hashErrorCode = hashParams.get("error_code");
+  const hashErrorDescription = hashParams.get("error_description");
   const companyInitials = (invitation?.companyName || "Company")
     .split(" ")
     .filter(Boolean)
     .slice(0, 2)
     .map((part) => part[0]?.toUpperCase() ?? "")
     .join("");
-  const hasLength = password.length >= 8;
-  const hasSymbol = /[!@#$%^&*(),.?":{}|<>]/.test(password);
+  const passwordChecks = getPasswordValidation(password);
+  const hasLength = passwordChecks.minLength;
+  const hasSymbol = passwordChecks.special;
   const hasMatch = password.length > 0 && password === confirmPassword;
 
   const resolveCompanyById = async (companyId: string) => {
@@ -134,7 +144,20 @@ export default function SetPassword() {
     };
 
     const validateInvite = async () => {
-      if (token) {
+      setValidationError(null);
+      if (hashErrorCode) {
+        const readable = hashErrorDescription
+          ? decodeURIComponent(hashErrorDescription.replace(/\+/g, " "))
+          : "This password reset link is invalid or has expired.";
+        if (mounted) {
+          setValidationError(readable);
+          setValidating(false);
+        }
+        return;
+      }
+
+      const isLegacyInvitationToken = !!token && inviteType !== "recovery";
+      if (isLegacyInvitationToken) {
         const { data, error } = await withTimeout(
           supabase.functions.invoke("validate-invitation", {
             body: { token },
@@ -159,20 +182,36 @@ export default function SetPassword() {
         return;
       }
 
-      if ((inviteType === "invite" || inviteType === "recovery") && (tokenHash || authCode)) {
-        await withTimeout(
-          supabase.auth.signOut({ scope: "local" }),
-          SUPABASE_REQUEST_TIMEOUT_MS,
-          "Clear existing session before invite auth",
-        );
+      if (inviteType === "recovery" && (tokenHash || authCode) && recoveryVerificationNonce === 0) {
+        if (mounted) {
+          setPendingRecoveryVerification(true);
+          setValidating(false);
+        }
+        return;
+      }
 
+      if ((inviteType === "invite" || inviteType === "recovery") && (tokenHash || authCode)) {
+        if (mounted) setPendingRecoveryVerification(false);
         if (authCode) {
           const { error } = await withTimeout(
             supabase.auth.exchangeCodeForSession(authCode),
             SUPABASE_REQUEST_TIMEOUT_MS,
             "Invitation code exchange",
           );
-          if (error) throw error;
+          if (error) {
+            const access_token = hashParams.get("access_token");
+            const refresh_token = hashParams.get("refresh_token");
+            if (access_token && refresh_token) {
+              const { error: sessionError } = await withTimeout(
+                supabase.auth.setSession({ access_token, refresh_token }),
+                SUPABASE_REQUEST_TIMEOUT_MS,
+                "Recovery hash session set",
+              );
+              if (sessionError) throw sessionError;
+            } else {
+              throw error;
+            }
+          }
         } else if (tokenHash) {
           const { error } = await withTimeout(
             supabase.auth.verifyOtp({
@@ -210,14 +249,17 @@ export default function SetPassword() {
     });
 
     validateInvite().catch(() => {
-      if (mounted) setValidating(false);
+      if (mounted) {
+        setValidationError("This password reset link is invalid or has expired. Request a new reset link from login.");
+        setValidating(false);
+      }
     });
 
     return () => {
       mounted = false;
       subscription.unsubscribe();
     };
-  }, [token, tokenHash, authCode, inviteType]);
+  }, [token, tokenHash, authCode, inviteType, location.hash, recoveryVerificationNonce]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -228,8 +270,14 @@ export default function SetPassword() {
       return;
     }
 
-    if (!hasLength || !hasSymbol) {
+    if (!isStrongPassword(password)) {
       toast({ title: "Password must be at least 8 characters and include one special character", variant: "destructive" });
+      return;
+    }
+
+    const emailValidation = validateBusinessEmail(invitation.email);
+    if (!emailValidation.valid) {
+      toast({ title: "Invalid email", description: emailValidation.message, variant: "destructive" });
       return;
     }
 
@@ -274,7 +322,7 @@ export default function SetPassword() {
 
         const brand = await resolveCompanyByUserId(user.id);
         toast({ title: "Account activated" });
-        navigate(brand.companySlug ? `/${brand.companySlug}/employee/dashboard` : "/login");
+        navigate(brand.companySlug ? `/${brand.companySlug}/employee/onboarding/profile` : "/login");
         return;
       }
 
@@ -341,7 +389,7 @@ export default function SetPassword() {
       const brand = activatedUser ? await resolveCompanyByUserId(activatedUser.id) : null;
 
       toast({ title: "Account created" });
-      navigate(brand?.companySlug ? `/${brand.companySlug}/employee/dashboard` : "/login");
+      navigate(brand?.companySlug ? `/${brand.companySlug}/employee/onboarding/profile` : "/login");
     } catch (err: any) {
       toast({ title: "Error", description: err.message, variant: "destructive" });
     } finally {
@@ -357,12 +405,36 @@ export default function SetPassword() {
     );
   }
 
+  if (pendingRecoveryVerification) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background p-4">
+        <Card className="w-full max-w-md">
+          <CardContent className="pt-6 text-center space-y-4">
+            <p className="text-muted-foreground">
+              Continue to securely verify your password reset link.
+            </p>
+            <Button
+              onClick={() => {
+                setValidating(true);
+                setRecoveryVerificationNonce((value) => value + 1);
+              }}
+              className="w-full"
+            >
+              Continue Reset Password
+            </Button>
+            <Button variant="link" onClick={() => navigate("/login")}>Back to Login</Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   if (!invitation) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background p-4">
         <Card className="w-full max-w-md">
           <CardContent className="pt-6 text-center">
-            <p className="text-muted-foreground">Invalid or expired invitation link.</p>
+            <p className="text-muted-foreground">{validationError || "Invalid or expired invitation link."}</p>
             <Button variant="link" onClick={() => navigate("/login")} className="mt-4">Go to Login</Button>
           </CardContent>
         </Card>
@@ -382,9 +454,13 @@ export default function SetPassword() {
             </div>
           )}
           <div>
-            <CardTitle className="text-[28px] leading-tight font-medium text-black">Set new password</CardTitle>
+            <div className="mb-4 text-left">
+              <p className="text-xs text-[#666] mb-2">Step 1 of 3: Set Password</p>
+              <Progress value={33} />
+            </div>
+            <CardTitle className="text-[28px] leading-tight font-medium text-black">Create Your Password</CardTitle>
             <CardDescription className="text-base text-[#666] mt-2">
-              Your new password must be different from previous ones.
+              Create a secure password for your account. It must be different from your previous passwords and include at least 8 characters with uppercase and lowercase letters, a number, and a special character.
             </CardDescription>
             <div className="text-xs mt-3 text-[#666]">
               <span className="block">{invitation.email}</span>
@@ -395,7 +471,7 @@ export default function SetPassword() {
         <CardContent className="px-5 pb-8">
           <form onSubmit={handleSubmit} className="space-y-5">
             <div className="space-y-2 text-left">
-              <label htmlFor="password" className="block text-sm font-medium">New Password</label>
+              <label htmlFor="password" className="block text-sm font-medium">Password</label>
               <input
                 id="password"
                 type="password"

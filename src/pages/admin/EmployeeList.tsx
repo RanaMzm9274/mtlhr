@@ -3,6 +3,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import {
   Dialog,
@@ -37,6 +38,7 @@ import { SUPABASE_REQUEST_TIMEOUT_MS, withTimeout, withTimeoutFallback } from "@
 import { absoluteAppUrl } from "@/lib/basePath";
 import { Line, LineChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
+import { usePortalSearch } from "@/contexts/PortalSearchContext";
 
 interface Employee extends ProfileRecord {
   id?: string;
@@ -51,6 +53,7 @@ const PAGE_SIZE = 10;
 
 export default function EmployeeList() {
   const { toast } = useToast();
+  const { searchTerm } = usePortalSearch();
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -58,6 +61,8 @@ export default function EmployeeList() {
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteName, setInviteName] = useState("");
   const [invitePosition, setInvitePosition] = useState("");
+  const [inviteEmploymentType, setInviteEmploymentType] = useState<"full_time" | "part_time">("full_time");
+  const [inviteWorkingHours, setInviteWorkingHours] = useState("6");
   const [inviting, setInviting] = useState(false);
   const [filter, setFilter] = useState<"all" | "active" | "inactive" | "invited">("all");
   const [sortKey, setSortKey] = useState<SortKey>("created_at");
@@ -108,6 +113,8 @@ export default function EmployeeList() {
     setInviteEmail("");
     setInviteName("");
     setInvitePosition("");
+    setInviteEmploymentType("full_time");
+    setInviteWorkingHours("6");
   };
 
   const getFunctionAuthHeaders = async () => {
@@ -123,6 +130,17 @@ export default function EmployeeList() {
 
   const handleInvite = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (inviteEmploymentType === "part_time") {
+      const parsedWorkingHours = Number(inviteWorkingHours);
+      if (!Number.isFinite(parsedWorkingHours) || parsedWorkingHours < 1 || parsedWorkingHours > 12) {
+        toast({
+          title: "Invalid working hours",
+          description: "Part-time employees must have working hours between 1 and 12.",
+          variant: "destructive",
+        });
+        return;
+      }
+    }
     setInviting(true);
     try {
       const headers = await getFunctionAuthHeaders();
@@ -133,6 +151,8 @@ export default function EmployeeList() {
             email: inviteEmail.trim(),
             name: inviteName.trim(),
             position: invitePosition.trim(),
+            employment_type: inviteEmploymentType,
+            working_hours: inviteEmploymentType === "part_time" ? Number(inviteWorkingHours) : null,
             redirectTo: absoluteAppUrl("/set-password"),
           },
         }),
@@ -334,8 +354,9 @@ export default function EmployeeList() {
 
   const processed = useMemo(() => {
     let list = [...employees];
-    if (search) {
-      const query = search.toLowerCase();
+    const effectiveSearch = (searchTerm || search).trim().toLowerCase();
+    if (effectiveSearch) {
+      const query = effectiveSearch;
       list = list.filter((employee) => employee.name.toLowerCase().includes(query) || employee.email.toLowerCase().includes(query));
     }
 
@@ -402,6 +423,33 @@ export default function EmployeeList() {
                 <Label>Position</Label>
                 <Input value={invitePosition} onChange={(e) => setInvitePosition(e.target.value)} required placeholder="Software Engineer" />
               </div>
+              <div className="space-y-2">
+                <Label>Employment Type</Label>
+                <Select value={inviteEmploymentType} onValueChange={(value: "full_time" | "part_time") => setInviteEmploymentType(value)}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="full_time">Full Time</SelectItem>
+                    <SelectItem value="part_time">Part Time</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              {inviteEmploymentType === "part_time" && (
+                <div className="space-y-2">
+                  <Label>Working Hours</Label>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={12}
+                    step="0.5"
+                    value={inviteWorkingHours}
+                    onChange={(e) => setInviteWorkingHours(e.target.value)}
+                    required
+                    placeholder="e.g. 6"
+                  />
+                </div>
+              )}
               <DialogFooter>
                 <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
                 <Button type="submit" disabled={inviting}>
@@ -566,6 +614,14 @@ export default function EmployeeList() {
                       <div><span className="text-muted-foreground">Email:</span> <span className="font-medium">{selectedEmployee.email || "-"}</span></div>
                       <div><span className="text-muted-foreground">Phone:</span> <span>{selectedEmployee.phone || "-"}</span></div>
                       <div><span className="text-muted-foreground">Position:</span> <span>{selectedEmployee.position || "-"}</span></div>
+                      <div>
+                        <span className="text-muted-foreground">Employment:</span>{" "}
+                        <span>{selectedEmployee.employment_type === "part_time" ? "Part Time" : "Full Time"}</span>
+                      </div>
+                      <div>
+                        <span className="text-muted-foreground">Shift Hours:</span>{" "}
+                        <span>{selectedEmployee.employment_type === "part_time" ? `${selectedEmployee.working_hours ?? "-"}h` : "9h (incl. break)"}</span>
+                      </div>
                       <div><span className="text-muted-foreground">Gender:</span> <span className="capitalize">{selectedEmployee.gender || "-"}</span></div>
                       <div><span className="text-muted-foreground">ID / Passport:</span> <span>{selectedEmployee.id_passport || "-"}</span></div>
                       <div><span className="text-muted-foreground">Status:</span> <span className="capitalize">{selectedEmployee.status || "-"}</span></div>

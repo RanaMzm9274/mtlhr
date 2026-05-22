@@ -23,6 +23,7 @@ import {
   type ProfileRecord,
 } from "@/lib/hrPortal";
 import { SUPABASE_REQUEST_TIMEOUT_MS, withTimeoutFallback } from "@/lib/async";
+import { usePortalSearch } from "@/contexts/PortalSearchContext";
 
 interface EmployeeDocument extends DocumentRecord {}
 
@@ -47,6 +48,7 @@ const buildFallbackProfile = (userId: string): ProfileRecord => ({
 
 export default function AdminDocuments() {
   const { toast } = useToast();
+  const { searchTerm } = usePortalSearch();
   const [groups, setGroups] = useState<EmployeeDocumentGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedUserId, setExpandedUserId] = useState<string | null>(null);
@@ -123,7 +125,14 @@ export default function AdminDocuments() {
   }, []);
 
   const processedGroups = useMemo(() => {
-    return [...groups].sort((a, b) => {
+    const query = searchTerm.trim().toLowerCase();
+    const searchableGroups = query
+      ? groups.filter((group) => {
+          const haystack = `${group.employee.name} ${group.employee.email} ${group.employee.position || ""}`.toLowerCase();
+          return haystack.includes(query) || group.documents.some((doc) => `${doc.file_name} ${doc.category}`.toLowerCase().includes(query));
+        })
+      : groups;
+    return [...searchableGroups].sort((a, b) => {
       if (a.lastUploadedAt && b.lastUploadedAt) {
         return new Date(b.lastUploadedAt).getTime() - new Date(a.lastUploadedAt).getTime();
       }
@@ -131,7 +140,7 @@ export default function AdminDocuments() {
       if (b.lastUploadedAt) return 1;
       return a.employee.name.localeCompare(b.employee.name);
     });
-  }, [groups]);
+  }, [groups, searchTerm]);
 
   const categoryLabel = (category: string) => {
     const map: Record<string, string> = {

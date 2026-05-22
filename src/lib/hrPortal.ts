@@ -19,6 +19,8 @@ export interface ProfileRecord {
   status: string;
   profile_completed: boolean;
   created_at?: string;
+  employment_type?: "full_time" | "part_time";
+  working_hours?: number | null;
 }
 
 export interface DocumentRecord {
@@ -111,6 +113,13 @@ export const normalizeProfileRecord = (row: AnyRecord, user?: Pick<User, "email"
     status: firstString(row?.status, user ? "active" : "invited"),
     profile_completed: typeof row?.profile_completed === "boolean" ? row.profile_completed : false,
     created_at: typeof row?.created_at === "string" ? row.created_at : undefined,
+    employment_type: row?.employment_type === "part_time" ? "part_time" : "full_time",
+    working_hours:
+      typeof row?.working_hours === "number"
+        ? row.working_hours
+        : Number.isFinite(Number(row?.working_hours))
+          ? Number(row.working_hours)
+          : null,
   };
 
   if (!row?.profile_completed) {

@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Eye, EyeOff, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { getPasswordValidation, isStrongPassword, validateBusinessEmail } from "@/lib/validation";
 
 export default function Signup() {
   const { signUpCompany } = useAuth();
@@ -18,11 +19,26 @@ export default function Signup() {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const passwordChecks = getPasswordValidation(signupPassword);
+  const strongPassword = isStrongPassword(signupPassword);
 
   const handleCompanySignup = async (e: React.FormEvent) => {
     e.preventDefault();
+    const emailCheck = validateBusinessEmail(signupEmail);
+    if (!emailCheck.valid) {
+      toast({ title: "Invalid email", description: emailCheck.message, variant: "destructive" });
+      return;
+    }
     if (signupPassword !== confirmPassword) {
       toast({ title: "Password mismatch", description: "Password and confirm password must match.", variant: "destructive" });
+      return;
+    }
+    if (!strongPassword) {
+      toast({
+        title: "Weak password",
+        description: "Use at least 8 characters and include one special character.",
+        variant: "destructive",
+      });
       return;
     }
 
@@ -120,10 +136,15 @@ export default function Signup() {
             By creating an account, you agree to our <a href="#" className="text-foreground underline">Terms of Service</a> and{" "}
             <a href="#" className="text-foreground underline">Privacy Policy</a>.
           </p>
+          <div className="rounded-xl bg-[#f9fafb] p-4 text-left mb-6">
+            <h3 className="text-[13px] uppercase tracking-[0.05em] text-[#666] mb-3">Password Requirements</h3>
+            <div className={`text-sm mb-1 ${passwordChecks.minLength ? "text-emerald-600" : "text-[#666]"}`}>At least 8 characters</div>
+            <div className={`text-sm ${passwordChecks.special ? "text-emerald-600" : "text-[#666]"}`}>At least one special character</div>
+          </div>
 
           <button
             type="submit"
-            disabled={loading}
+            disabled={loading || !strongPassword}
             className="w-full h-12 text-base font-medium text-white bg-black rounded-xl hover:opacity-85 transition-opacity disabled:opacity-60 disabled:cursor-not-allowed mb-6"
           >
             {loading ? <span className="inline-flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" /> Submitting...</span> : "Get started"}

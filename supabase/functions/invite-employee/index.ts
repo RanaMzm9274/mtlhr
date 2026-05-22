@@ -10,6 +10,8 @@ const InviteSchema = z.object({
   email: z.string().email(),
   name: z.string().min(1),
   position: z.string().min(1),
+  employment_type: z.enum(["full_time", "part_time"]).default("full_time"),
+  working_hours: z.number().min(1).max(12).nullable().optional(),
   company_id: z.string().uuid().optional(),
   redirectTo: z.string().url().optional(),
 });
@@ -47,8 +49,11 @@ function buildInviteRedirectTo(reqUrl: string, inputRedirectTo?: string): string
     const parsed = new URL(inputRedirectTo);
     // Preserve provided path so subfolder deploys like /lt-docx keep working.
     const normalizedPath = parsed.pathname.replace(/\/+$/, "");
-    const safePath = normalizedPath.endsWith("/set-password") ? normalizedPath : `${normalizedPath}/set-password`;
-    return `${parsed.origin}${safePath}${parsed.search}${parsed.hash}`;
+    const basePath = normalizedPath;
+    const safePath = basePath.endsWith("/set-password") ? basePath : `${basePath}/set-password`;
+    const cleanSearch = parsed.search || "";
+    // Always remove hash fragments so invite flow uses BrowserRouter paths.
+    return `${parsed.origin}${safePath}${cleanSearch}`;
   } catch {
     return fallback;
   }
@@ -154,8 +159,13 @@ Deno.serve(async (req) => {
     const portalBase = `${appOrigin}${appBasePath}`;
     const portalUrl = companySlug ? `${portalBase}/${companySlug}/login` : `${portalBase}/login`;
     const redirectTo = buildInviteRedirectTo(req.url, parsed.data.redirectTo);
+    const redirectWithType = (() => {
+      const url = new URL(redirectTo);
+      url.searchParams.set("type", "invite");
+      return url.toString();
+    })();
     const { data: inviteData, error: inviteError } = await adminClient.auth.admin.inviteUserByEmail(parsed.data.email, {
-      redirectTo,
+      redirectTo: redirectWithType,
       data: {
         name: parsed.data.name,
         position: parsed.data.position,
@@ -199,6 +209,8 @@ Deno.serve(async (req) => {
       name: parsed.data.name,
       email: parsed.data.email,
       position: parsed.data.position,
+      employment_type: parsed.data.employment_type,
+      working_hours: parsed.data.employment_type === "part_time" ? (parsed.data.working_hours ?? 6) : 9,
       status: "invited",
       company_id: companyId,
     };

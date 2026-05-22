@@ -4,24 +4,8 @@ const inferBasePathFromLocation = () => {
   const parts = window.location.pathname.split("/").filter(Boolean);
   if (parts.length < 2) return "";
   const candidate = parts[0];
-  // If deployed under a subfolder, first segment is usually a static app folder
-  // while app routes continue with known sections.
-  const appRouteHints = new Set([
-    "employee",
-    "dashboard",
-    "attendance",
-    "leaves",
-    "documents",
-    "profile",
-    "settings",
-    "login",
-    "signup",
-    "set-password",
-    "reset-password",
-    "pending-approval",
-    "super-admin",
-  ]);
-  if (parts.length >= 2 && appRouteHints.has(parts[1])) return `/${candidate}`;
+  // Avoid inferring a basename from dynamic company slug routes like /acme/employee/dashboard.
+  // Only infer explicit known subfolder deployments.
   if (/docx$/i.test(candidate)) return `/${candidate}`;
   return "";
 };
