@@ -12,6 +12,8 @@ const InviteSchema = z.object({
   position: z.string().min(1),
   employment_type: z.enum(["full_time", "part_time"]).default("full_time"),
   working_hours: z.number().min(1).max(12).nullable().optional(),
+  restrict_clock_in_ip: z.boolean().optional().default(false),
+  allowed_clock_in_ip: z.string().trim().optional().nullable(),
   company_id: z.string().uuid().optional(),
   redirectTo: z.string().url().optional(),
 });
@@ -72,6 +74,9 @@ Deno.serve(async (req) => {
     const parsed = InviteSchema.safeParse(body);
     if (!parsed.success) {
       return new Response(JSON.stringify({ error: "Invalid invitation payload" }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+    if (parsed.data.restrict_clock_in_ip && !parsed.data.allowed_clock_in_ip?.trim()) {
+      return new Response(JSON.stringify({ error: "allowed_clock_in_ip is required when restrict_clock_in_ip is enabled." }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
     const userClient = createClient(supabaseUrl, anonKey, { global: { headers: authHeader ? { Authorization: authHeader } : {} } });
@@ -211,6 +216,10 @@ Deno.serve(async (req) => {
       position: parsed.data.position,
       employment_type: parsed.data.employment_type,
       working_hours: parsed.data.employment_type === "part_time" ? (parsed.data.working_hours ?? 6) : 9,
+      restrict_clock_in_ip: parsed.data.restrict_clock_in_ip,
+      allowed_clock_in_ip: parsed.data.restrict_clock_in_ip
+        ? (parsed.data.allowed_clock_in_ip?.trim() || null)
+        : null,
       status: "invited",
       company_id: companyId,
     };

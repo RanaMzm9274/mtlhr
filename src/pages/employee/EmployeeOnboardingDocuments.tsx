@@ -15,12 +15,8 @@ export default function EmployeeOnboardingDocuments() {
   const [checking, setChecking] = useState(false);
   const [categories, setCategories] = useState<string[]>([]);
 
-  const requiredCategories = ["id_proof", "cv", "certificate"];
-  const uploadedRequiredCount = useMemo(
-    () => requiredCategories.filter((category) => categories.includes(category)).length,
-    [categories],
-  );
-  const progressValue = Math.round(66 + ((uploadedRequiredCount / requiredCategories.length) * 34));
+  const uploadedAnyDocument = useMemo(() => categories.length > 0, [categories]);
+  const progressValue = uploadedAnyDocument ? 100 : 66;
 
   const refreshCategories = async () => {
     if (!user) return;
@@ -54,11 +50,10 @@ export default function EmployeeOnboardingDocuments() {
 
       if (error) throw error;
       const uploaded = new Set(((data as Array<{ category?: string }>) ?? []).map((row) => row.category).filter(Boolean) as string[]);
-      const missingRequired = requiredCategories.filter((category) => !uploaded.has(category));
-      if (missingRequired.length > 0) {
+      if (uploaded.size < 1) {
         toast({
-          title: "Upload required documents",
-          description: "Passport, Share Code, and Work Permit are mandatory. 'Other' is optional.",
+          title: "Upload at least one document",
+          description: "At least one document is mandatory to complete onboarding.",
           variant: "destructive",
         });
         return;
@@ -78,18 +73,18 @@ export default function EmployeeOnboardingDocuments() {
       <div className="rounded-xl border bg-card p-4">
         <h2 className="font-semibold">Step 3 of 3: Upload Documents</h2>
         <p className="text-sm text-muted-foreground mt-1">
-          Mandatory categories: Passport, Share Code, Work Permit. Other is optional.
+          Upload at least one document to complete onboarding.
         </p>
         <div className="mt-3 space-y-2">
           <Progress value={progressValue} />
           <p className="text-xs text-muted-foreground">
-            Onboarding progress: {uploadedRequiredCount === 3 ? "3/3" : "2/3"} | Required uploaded: {uploadedRequiredCount}/3
+            Onboarding progress: {uploadedAnyDocument ? "3/3" : "2/3"} | Required uploaded: {uploadedAnyDocument ? "1/1" : "0/1"}
           </p>
         </div>
       </div>
       <EmployeeDocuments />
       <div className="flex justify-end">
-        <Button onClick={() => void handleFinish()} disabled={checking || uploadedRequiredCount < 3}>
+        <Button onClick={() => void handleFinish()} disabled={checking || !uploadedAnyDocument}>
           {checking ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
           Finish Onboarding
         </Button>

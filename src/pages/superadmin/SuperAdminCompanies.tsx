@@ -47,6 +47,8 @@ interface EmployeeRow {
   email: string;
   position: string | null;
   status: string;
+  restrict_clock_in_ip?: boolean | null;
+  allowed_clock_in_ip?: string | null;
 }
 
 const slugify = (value: string) => value.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
@@ -69,6 +71,8 @@ export default function SuperAdminCompanies() {
   const [inviteName, setInviteName] = useState("");
   const [inviteEmail, setInviteEmail] = useState("");
   const [invitePosition, setInvitePosition] = useState("");
+  const [inviteRestrictClockInIp, setInviteRestrictClockInIp] = useState(false);
+  const [inviteAllowedClockInIp, setInviteAllowedClockInIp] = useState("");
   const [inviting, setInviting] = useState(false);
 
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -88,6 +92,7 @@ export default function SuperAdminCompanies() {
   const [deleteEmployeeStep, setDeleteEmployeeStep] = useState<1 | 2>(1);
   const [deleteEmployeeConfirm, setDeleteEmployeeConfirm] = useState("");
   const [deletingEmployee, setDeletingEmployee] = useState(false);
+  const [savingEmployeeIpId, setSavingEmployeeIpId] = useState<string | null>(null);
 
   const employeesByCompany = useMemo(() => {
     const grouped = new Map<string, EmployeeRow[]>();
@@ -104,7 +109,7 @@ export default function SuperAdminCompanies() {
     setLoading(true);
     const [{ data: companyData, error: companyError }, { data: employeeData, error: employeeError }] = await Promise.all([
       supabase.from("companies").select("id,name,slug,status,created_at,bio,employee_count,revenue,logo_url").order("created_at", { ascending: false }),
-      supabase.from("employee_profiles").select("id,user_id,company_id,avatar_url,name,email,position,status").order("created_at", { ascending: false }),
+      supabase.from("employee_profiles").select("id,user_id,company_id,avatar_url,name,email,position,status,restrict_clock_in_ip,allowed_clock_in_ip").order("created_at", { ascending: false }),
     ]);
 
     if (companyError || employeeError) {
@@ -168,6 +173,10 @@ export default function SuperAdminCompanies() {
   const inviteEmployeeToCompany = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!inviteCompanyId) return;
+    if (inviteRestrictClockInIp && !inviteAllowedClockInIp.trim()) {
+      toast({ title: "IP required", description: "Enter an allowed IP when IP restriction is enabled.", variant: "destructive" });
+      return;
+    }
 
     setInviting(true);
     try {
@@ -178,6 +187,8 @@ export default function SuperAdminCompanies() {
           email: inviteEmail.trim(),
           name: inviteName.trim(),
           position: invitePosition.trim(),
+          restrict_clock_in_ip: inviteRestrictClockInIp,
+          allowed_clock_in_ip: inviteRestrictClockInIp ? inviteAllowedClockInIp.trim() : null,
           company_id: inviteCompanyId,
           redirectTo: absoluteAppUrl("/set-password"),
         },
@@ -191,6 +202,8 @@ export default function SuperAdminCompanies() {
       setInviteName("");
       setInviteEmail("");
       setInvitePosition("");
+      setInviteRestrictClockInIp(false);
+      setInviteAllowedClockInIp("");
       fetchData();
     } catch (err: any) {
       toast({ title: "Invite failed", description: err.message, variant: "destructive" });
@@ -302,6 +315,38 @@ export default function SuperAdminCompanies() {
     }
   };
 
+  const updateEmployeeIpRestriction = async (employee: EmployeeRow, restrict: boolean, allowedIp: string) => {
+    const normalizedIp = allowedIp.trim();
+    if (restrict && !normalizedIp) {
+      toast({ title: "IP required", description: "Enter an allowed IP when restriction is enabled.", variant: "destructive" });
+      return;
+    }
+
+    setSavingEmployeeIpId(employee.id);
+    const { error } = await supabase
+      .from("employee_profiles")
+      .update({
+        restrict_clock_in_ip: restrict,
+        allowed_clock_in_ip: restrict ? normalizedIp : null,
+      })
+      .eq("id", employee.id);
+    setSavingEmployeeIpId(null);
+
+    if (error) {
+      toast({ title: "Update failed", description: error.message, variant: "destructive" });
+      return;
+    }
+
+    setEmployees((prev) =>
+      prev.map((row) =>
+        row.id === employee.id
+          ? { ...row, restrict_clock_in_ip: restrict, allowed_clock_in_ip: restrict ? normalizedIp : null }
+          : row,
+      ),
+    );
+    toast({ title: "Employee IP restriction updated" });
+  };
+
   return (
     <div className="space-y-6">
       <div>
@@ -379,6 +424,25 @@ export default function SuperAdminCompanies() {
                           <Input value={inviteName} onChange={(e) => setInviteName(e.target.value)} placeholder="Full name" required />
                           <Input type="email" value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} placeholder="Email" required />
                           <Input value={invitePosition} onChange={(e) => setInvitePosition(e.target.value)} placeholder="Position" required />
+                          <div className="md:col-span-3 flex items-center gap-2">
+                            <input
+                              id={`restrict-ip-${company.id}`}
+                              type="checkbox"
+                              checked={inviteRestrictClockInIp}
+                              onChange={(e) => setInviteRestrictClockInIp(e.target.checked)}
+                            />
+                            <Label htmlFor={`restrict-ip-${company.id}`}>Restrict check-in to one IP</Label>
+                          </div>
+                          {inviteRestrictClockInIp && (
+                            <div className="md:col-span-3">
+                              <Input
+                                value={inviteAllowedClockInIp}
+                                onChange={(e) => setInviteAllowedClockInIp(e.target.value)}
+                                placeholder="Allowed IPv4 (e.g. 203.0.113.10)"
+                                required
+                              />
+                            </div>
+                          )}
                           <div className="md:col-span-3">
                             <Button type="submit" disabled={inviting}>{inviting ? "Sending..." : "Send Invitation"}</Button>
                           </div>
@@ -424,6 +488,51 @@ export default function SuperAdminCompanies() {
                                   <div>
                                     <p className="font-medium">{employee.name || "-"}</p>
                                     <p className="text-xs text-muted-foreground">{employee.email || "-"}</p>
+                                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                                      <label className="text-xs flex items-center gap-1">
+                                        <input
+                                          type="checkbox"
+                                          checked={!!employee.restrict_clock_in_ip}
+                                          onChange={(e) => {
+                                            const checked = e.target.checked;
+                                            setEmployees((prev) =>
+                                              prev.map((row) =>
+                                                row.id === employee.id ? { ...row, restrict_clock_in_ip: checked } : row,
+                                              ),
+                                            );
+                                          }}
+                                        />
+                                        Restrict clock-in IP
+                                      </label>
+                                      <Input
+                                        className="h-8 w-56"
+                                        value={employee.allowed_clock_in_ip ?? ""}
+                                        onChange={(e) => {
+                                          const value = e.target.value;
+                                          setEmployees((prev) =>
+                                            prev.map((row) =>
+                                              row.id === employee.id ? { ...row, allowed_clock_in_ip: value } : row,
+                                            ),
+                                          );
+                                        }}
+                                        placeholder="Allowed IP"
+                                        disabled={!employee.restrict_clock_in_ip}
+                                      />
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        disabled={savingEmployeeIpId === employee.id}
+                                        onClick={() =>
+                                          void updateEmployeeIpRestriction(
+                                            employee,
+                                            !!employee.restrict_clock_in_ip,
+                                            employee.allowed_clock_in_ip ?? "",
+                                          )
+                                        }
+                                      >
+                                        {savingEmployeeIpId === employee.id ? "Saving..." : "Save IP"}
+                                      </Button>
+                                    </div>
                                   </div>
                                 </div>
                                 <div className="flex items-center gap-3">

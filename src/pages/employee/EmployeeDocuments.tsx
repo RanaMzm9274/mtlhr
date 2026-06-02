@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/table";
 import { Upload, Trash2, Download, Loader2, FileText } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { buildDocumentInsertPayload, normalizeDocumentRecord } from "@/lib/hrPortal";
+import { buildDocumentInsertPayload, normalizeDocumentRecord, normalizeStoragePath } from "@/lib/hrPortal";
 import { SUPABASE_REQUEST_TIMEOUT_MS, withTimeout, withTimeoutFallback } from "@/lib/async";
 
 interface Document {
@@ -110,13 +110,14 @@ export default function EmployeeDocuments() {
   };
 
   const handleDelete = async (doc: Document) => {
-    if (!doc.file_url) {
+    const resolvedPath = normalizeStoragePath(doc.file_url);
+    if (!resolvedPath) {
       toast({ title: "File path missing", description: "This document record has no storage path.", variant: "destructive" });
       return;
     }
 
     await withTimeout(
-      supabase.storage.from("documents").remove([doc.file_url]),
+      supabase.storage.from("documents").remove([resolvedPath]),
       SUPABASE_REQUEST_TIMEOUT_MS,
       "Document delete",
     );
@@ -130,13 +131,14 @@ export default function EmployeeDocuments() {
   };
 
   const handleDownload = async (doc: Document) => {
-    if (!doc.file_url) {
+    const resolvedPath = normalizeStoragePath(doc.file_url);
+    if (!resolvedPath) {
       toast({ title: "Download unavailable", description: "This document record has no storage path.", variant: "destructive" });
       return;
     }
 
     const { data } = await withTimeout(
-      supabase.storage.from("documents").createSignedUrl(doc.file_url, 60),
+      supabase.storage.from("documents").createSignedUrl(resolvedPath, 60),
       SUPABASE_REQUEST_TIMEOUT_MS,
       "Document download link",
     );

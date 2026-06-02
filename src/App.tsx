@@ -22,6 +22,7 @@ import EmployeeLeave from "@/pages/employee/EmployeeLeave";
 import EmployeeOnboardingProfile from "@/pages/employee/EmployeeOnboardingProfile";
 import EmployeeOnboardingDocuments from "@/pages/employee/EmployeeOnboardingDocuments";
 import SettingsPage from "@/pages/SettingsPage";
+import MessagesPage from "@/pages/MessagesPage";
 import NotFound from "@/pages/NotFound";
 import PendingApproval from "@/pages/PendingApproval";
 import SuperAdminCompanies from "@/pages/superadmin/SuperAdminCompanies";
@@ -71,7 +72,6 @@ function AppRoutes() {
   const [needsProfileOnboarding, setNeedsProfileOnboarding] = useState(false);
   const [needsDocumentsOnboarding, setNeedsDocumentsOnboarding] = useState(false);
   const [onboardingEvaluatedPath, setOnboardingEvaluatedPath] = useState("");
-  const requiredDocumentCategories = ["id_proof", "cv", "certificate"];
 
   useEffect(() => {
     let active = true;
@@ -109,7 +109,7 @@ function AppRoutes() {
             .map((row) => row.category)
             .filter(Boolean) as string[],
         );
-        const docsDone = requiredDocumentCategories.every((category) => uploaded.has(category));
+        const docsDone = uploaded.size > 0;
         setNeedsProfileOnboarding(!profileDone);
         setNeedsDocumentsOnboarding(profileDone && !docsDone);
         setOnboardingEvaluatedPath(location.pathname);
@@ -230,6 +230,10 @@ function AppRoutes() {
         element={<Navigate to={adminPath("profile")} replace />}
       />
       <Route
+        path="/messages"
+        element={<Navigate to={adminPath("messages")} replace />}
+      />
+      <Route
         path="/settings"
         element={<Navigate to={adminPath("settings")} replace />}
       />
@@ -240,6 +244,7 @@ function AppRoutes() {
         <Route path="leaves" element={<AdminLeaves />} />
         <Route path="attendance" element={<AdminAttendance />} />
         <Route path="documents" element={<AdminDocuments />} />
+        <Route path="messages" element={<MessagesPage />} />
         <Route path="profile" element={<AdminProfile />} />
         <Route path="settings" element={<SettingsPage />} />
       </Route>
@@ -252,6 +257,7 @@ function AppRoutes() {
         <Route path="profile" element={<EmployeeProfile />} />
         <Route path="documents" element={<EmployeeDocuments />} />
         <Route path="leave" element={<EmployeeLeave />} />
+        <Route path="messages" element={<MessagesPage />} />
         <Route path="settings" element={<SettingsPage />} />
       </Route>
 

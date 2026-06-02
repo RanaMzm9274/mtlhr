@@ -43,6 +43,7 @@ export default function AdminAttendance() {
   const { companySlug } = useAuth();
   const { toast } = useToast();
   const [companyId, setCompanyId] = useState<string | null>(null);
+  const [nowTick, setNowTick] = useState(Date.now());
   const [date] = useState(today());
   const [employees, setEmployees] = useState<EmployeeRow[]>([]);
   const [attendance, setAttendance] = useState<Map<string, AttendanceRow>>(new Map());
@@ -62,8 +63,14 @@ export default function AdminAttendance() {
   const [customFromDate, setCustomFromDate] = useState(today());
   const [customToDate, setCustomToDate] = useState(today());
   const [reportRows, setReportRows] = useState<AttendanceRow[]>([]);
+  const [reportHolidayRanges, setReportHolidayRanges] = useState<Array<{ date_from: string; date_to: string }>>([]);
   const [reportLoading, setReportLoading] = useState(false);
   const [breakColumnsSupported, setBreakColumnsSupported] = useState(true);
+
+  useEffect(() => {
+    const interval = setInterval(() => setNowTick(Date.now()), 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   const normalizeAttendanceRows = (rows: any[] = []) =>
     rows.map((row) => ({
@@ -76,6 +83,15 @@ export default function AdminAttendance() {
 
   const isMissingBreakColumnsError = (message?: string) =>
     !!message && (message.includes("break_minutes") || message.includes("break_started_at") || message.includes("break_selected_minutes"));
+
+  const getBreakElapsedMinutes = (row: AttendanceRow) => {
+    if (!row.break_started_at) return 0;
+    return Math.max(0, Math.ceil((nowTick - new Date(row.break_started_at).getTime()) / 60000));
+  };
+
+  const getBreakUsedMinutes = (row: AttendanceRow) => Math.min(60, (row.break_minutes ?? 0) + getBreakElapsedMinutes(row));
+
+  const getBreakRemainingMinutes = (row: AttendanceRow) => Math.max(0, 60 - getBreakUsedMinutes(row));
 
   useEffect(() => {
     if (!companySlug) return;
@@ -304,14 +320,22 @@ export default function AdminAttendance() {
       return;
     }
     setReportLoading(true);
-    const { data, error } = await supabase
-      .from("attendance_entries")
-      .select("id,user_id,work_date,scheduled_start,scheduled_end,check_in_at,check_out_at,break_minutes,break_started_at,break_selected_minutes,manual_work_hours")
-      .eq("company_id", companyId)
-      .eq("user_id", reportEmployeeId)
-      .gte("work_date", range.from)
-      .lte("work_date", range.to)
-      .order("work_date", { ascending: false });
+    const [{ data, error }, { data: holidayRows, error: holidayError }] = await Promise.all([
+      supabase
+        .from("attendance_entries")
+        .select("id,user_id,work_date,scheduled_start,scheduled_end,check_in_at,check_out_at,break_minutes,break_started_at,break_selected_minutes,manual_work_hours")
+        .eq("company_id", companyId)
+        .eq("user_id", reportEmployeeId)
+        .gte("work_date", range.from)
+        .lte("work_date", range.to)
+        .order("work_date", { ascending: false }),
+      supabase
+        .from("company_holidays")
+        .select("date_from,date_to")
+        .eq("company_id", companyId)
+        .lte("date_from", range.to)
+        .gte("date_to", range.from),
+    ]);
 
     if (error && isMissingBreakColumnsError(error.message)) {
       const { data: fallbackData, error: fallbackError } = await supabase
@@ -327,6 +351,10 @@ export default function AdminAttendance() {
         toast({ title: "Report failed", description: fallbackError.message, variant: "destructive" });
         return;
       }
+      if (holidayError) {
+        toast({ title: "Holiday fetch failed", description: holidayError.message, variant: "destructive" });
+      }
+      setReportHolidayRanges((holidayRows as Array<{ date_from: string; date_to: string }>) ?? []);
       setBreakColumnsSupported(false);
       setReportRows(normalizeAttendanceRows((fallbackData as any[]) ?? []));
       return;
@@ -337,6 +365,11 @@ export default function AdminAttendance() {
       toast({ title: "Report failed", description: error.message, variant: "destructive" });
       return;
     }
+    if (holidayError) {
+      toast({ title: "Holiday fetch failed", description: holidayError.message, variant: "destructive" });
+      return;
+    }
+    setReportHolidayRanges((holidayRows as Array<{ date_from: string; date_to: string }>) ?? []);
     setReportRows(normalizeAttendanceRows((data as any[]) ?? []));
   };
 
@@ -344,16 +377,51 @@ export default function AdminAttendance() {
     fetchReport();
   }, [companyId, reportEmployeeId, reportPreset]);
 
+  const reportDisplayRows = useMemo(() => {
+    const range = getReportRange(reportPreset);
+    const allDates = getDateRange(range.from, range.to);
+    const attendanceByDate = new Map(reportRows.map((row) => [row.work_date, row]));
+    return allDates
+      .slice()
+      .reverse()
+      .map((workDate) => {
+        const existing = attendanceByDate.get(workDate);
+        if (existing) return existing;
+        return {
+          id: `virtual-${reportEmployeeId}-${workDate}`,
+          user_id: reportEmployeeId,
+          work_date: workDate,
+          scheduled_start: null,
+          scheduled_end: null,
+          check_in_at: null,
+          check_out_at: null,
+          break_minutes: 0,
+          break_started_at: null,
+          break_selected_minutes: null,
+          manual_work_hours: null,
+        } as AttendanceRow;
+      });
+  }, [reportRows, reportEmployeeId, reportPreset, customFromDate, customToDate]);
+
+  const isHoliday = (workDate: string) => reportHolidayRanges.some((holiday) => workDate >= holiday.date_from && workDate <= holiday.date_to);
+
+  const getAttendanceStatus = (row: AttendanceRow) => {
+    if (isHoliday(row.work_date)) return "Holiday";
+    if (isWeekend(row.work_date)) return "Weekend";
+    if (row.check_in_at || row.check_out_at || (typeof row.manual_work_hours === "number" && row.manual_work_hours > 0)) return "Present";
+    return "Absent";
+  };
+
   const reportSummary = useMemo(() => {
     const range = getReportRange(reportPreset);
-    const totalDays = getDateRange(range.from, range.to).filter((workDate) => !isWeekend(workDate)).length;
+    const totalDays = getDateRange(range.from, range.to).filter((workDate) => !isWeekend(workDate) && !isHoliday(workDate)).length;
     const isPresent = (row: AttendanceRow) =>
       !!row.check_in_at ||
       !!row.check_out_at ||
       (typeof row.manual_work_hours === "number" && row.manual_work_hours > 0);
-    const presentDays = reportRows.filter((row) => !isWeekend(row.work_date) && isPresent(row)).length;
-    const completeDays = reportRows.filter((row) => {
-      if (isWeekend(row.work_date)) return false;
+    const presentDays = reportDisplayRows.filter((row) => !isWeekend(row.work_date) && !isHoliday(row.work_date) && isPresent(row)).length;
+    const completeDays = reportDisplayRows.filter((row) => {
+      if (isWeekend(row.work_date) || isHoliday(row.work_date)) return false;
       if (typeof row.manual_work_hours === "number" && row.manual_work_hours > 0) return true;
       return !!row.check_in_at && !!row.check_out_at;
     }).length;
@@ -369,10 +437,11 @@ export default function AdminAttendance() {
       totalDays,
       presentDays,
       absentDays: Math.max(totalDays - presentDays, 0),
+      holidayDays: getDateRange(range.from, range.to).filter((workDate) => isHoliday(workDate)).length,
       completeDays,
       totalHours: totalHours.toFixed(1),
     };
-  }, [reportRows, reportPreset, customFromDate, customToDate]);
+  }, [reportRows, reportDisplayRows, reportHolidayRanges, reportPreset, customFromDate, customToDate]);
 
   const reportChartData = useMemo(() => {
     return [...reportRows]
@@ -511,14 +580,15 @@ export default function AdminAttendance() {
             <Button onClick={fetchReport} disabled={reportLoading}>{reportLoading ? "Loading..." : "Refresh Report"}</Button>
           </div>
 
-            <div className="grid md:grid-cols-6 gap-2 text-sm">
+            <div className="grid md:grid-cols-7 gap-2 text-sm">
             <div className="border rounded-md p-3">Total Days: <span className="font-semibold">{reportSummary.totalDays}</span></div>
             <div className="border rounded-md p-3">Present: <span className="font-semibold">{reportSummary.presentDays}</span></div>
-            <div className="border rounded-md p-3">Absent: <span className="font-semibold">{reportSummary.absentDays}</span></div>
-            <div className="border rounded-md p-3">Completed: <span className="font-semibold">{reportSummary.completeDays}</span></div>
+              <div className="border rounded-md p-3">Absent: <span className="font-semibold">{reportSummary.absentDays}</span></div>
+              <div className="border rounded-md p-3">Holidays: <span className="font-semibold">{reportSummary.holidayDays}</span></div>
+              <div className="border rounded-md p-3">Completed: <span className="font-semibold">{reportSummary.completeDays}</span></div>
               <div className="border rounded-md p-3">Hours: <span className="font-semibold">{reportSummary.totalHours}</span></div>
-              <div className="border rounded-md p-3">Break (min): <span className="font-semibold">{reportRows.reduce((s, r) => s + (r.break_minutes ?? 0), 0)}</span></div>
-          </div>
+              <div className="border rounded-md p-3">Break (min): <span className="font-semibold">{reportRows.reduce((s, r) => s + getBreakUsedMinutes(r), 0)}</span></div>
+            </div>
 
           <div className="grid gap-4 lg:grid-cols-2">
             <div className="border rounded-md overflow-hidden">
@@ -534,20 +604,20 @@ export default function AdminAttendance() {
                   </tr>
                 </thead>
                 <tbody>
-                  {reportRows.map((row) => (
+                  {reportDisplayRows.map((row) => (
                     <tr key={row.id} className="border-t">
                       <td className="p-2">{new Date(row.work_date).toLocaleDateString()}</td>
                       <td className="p-2">{getDisplayCheckIn(row)}</td>
                       <td className="p-2">{getDisplayCheckOut(row)}</td>
                       <td className="p-2">
-                        {(row.break_minutes ?? 0) > 0 ? `${row.break_minutes} min` : "-"}
-                        {row.break_started_at ? ` (Active ${row.break_selected_minutes ?? 0}m)` : ""}
+                        {getBreakUsedMinutes(row) > 0 ? `${getBreakUsedMinutes(row)} min` : "-"}
+                        {row.break_started_at ? ` (Active ${getBreakElapsedMinutes(row)}m | Remaining ${getBreakRemainingMinutes(row)}m)` : ""}
                       </td>
                       <td className="p-2">{typeof row.manual_work_hours === "number" ? row.manual_work_hours : "-"}</td>
-                      <td className="p-2">{row.check_in_at || row.check_out_at || (typeof row.manual_work_hours === "number" && row.manual_work_hours > 0) ? "Present" : "Absent"}</td>
+                      <td className="p-2">{getAttendanceStatus(row)}</td>
                     </tr>
                   ))}
-                  {reportRows.length === 0 && (
+                  {reportDisplayRows.length === 0 && (
                     <tr>
                       <td className="p-3 text-muted-foreground" colSpan={6}>No attendance found for selected range.</td>
                     </tr>

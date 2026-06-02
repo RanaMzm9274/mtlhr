@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -30,6 +30,8 @@ export default function EmployeeDashboard() {
   const [nowTick, setNowTick] = useState(Date.now());
   const [selectedBreakMinutes, setSelectedBreakMinutes] = useState(15);
   const [companyId, setCompanyId] = useState<string | null>(null);
+  const [upcomingHolidays, setUpcomingHolidays] = useState<Array<{ mon: string; day: string; name: string; rangeText: string }>>([]);
+  const autoCheckoutDoneFor = useRef<string | null>(null);
 
   useEffect(() => {
     const interval = setInterval(() => setNowTick(Date.now()), 1000);
@@ -129,12 +131,91 @@ export default function EmployeeDashboard() {
     return () => clearInterval(interval);
   }, [attendance?.check_in_at, attendance?.check_out_at, companyId]);
 
+  useEffect(() => {
+    if (!companyId) {
+      setUpcomingHolidays([]);
+      return;
+    }
+    const todayDate = new Date().toISOString().slice(0, 10);
+    supabase
+      .from("company_holidays")
+      .select("name,date_from,date_to")
+      .eq("company_id", companyId)
+      .gte("date_to", todayDate)
+      .order("date_from", { ascending: true })
+      .limit(6)
+      .then(({ data }) => {
+        const mapped = ((data as Array<{ name: string; date_from: string; date_to: string }>) ?? []).map((holiday) => {
+          const date = new Date(`${holiday.date_from}T00:00:00`);
+          const rangeText =
+            holiday.date_from === holiday.date_to
+              ? new Date(`${holiday.date_from}T00:00:00`).toLocaleDateString()
+              : `${new Date(`${holiday.date_from}T00:00:00`).toLocaleDateString()} - ${new Date(`${holiday.date_to}T00:00:00`).toLocaleDateString()}`;
+          return {
+            mon: date.toLocaleDateString("en-US", { month: "short" }).toUpperCase(),
+            day: String(date.getDate()).padStart(2, "0"),
+            name: holiday.name,
+            rangeText,
+          };
+        });
+        setUpcomingHolidays(mapped);
+      });
+  }, [companyId]);
+
   const upsertAttendance = async (mode: "in" | "out") => {
     if (!user || !profile?.company_id) {
       toast({ title: "Attendance unavailable", description: "Your profile is not linked to a company yet.", variant: "destructive" });
       return;
     }
     setBusy(true);
+    if (mode === "out") {
+      const { error: closeRpcError } = await withTimeoutFallback(
+        supabase.rpc("close_my_open_attendance", {
+          p_company_id: profile.company_id,
+        }),
+        { error: null } as any,
+        SUPABASE_REQUEST_TIMEOUT_MS,
+      );
+
+      const closeRpcMissing =
+        !!closeRpcError &&
+        (closeRpcError.message.includes("Could not find the function public.close_my_open_attendance") ||
+          closeRpcError.message.includes("close_my_open_attendance"));
+
+      if (!closeRpcError) {
+        setBusy(false);
+        toast({ title: "Checked out" });
+        fetchAttendance(profile.company_id);
+        return;
+      }
+
+      if (!closeRpcMissing) {
+        setBusy(false);
+        toast({ title: "Attendance failed", description: closeRpcError.message, variant: "destructive" });
+        return;
+      }
+
+      // Legacy fallback for DBs without close_my_open_attendance migration.
+      const { error: legacyOutError } = await withTimeoutFallback(
+        supabase.rpc("record_my_attendance", {
+          p_company_id: profile.company_id,
+          p_mode: "out",
+        }),
+        { error: null } as any,
+        SUPABASE_REQUEST_TIMEOUT_MS,
+      );
+
+      setBusy(false);
+      if (legacyOutError) {
+        toast({ title: "Attendance failed", description: legacyOutError.message, variant: "destructive" });
+        return;
+      }
+
+      toast({ title: "Checked out" });
+      fetchAttendance(profile.company_id);
+      return;
+    }
+
     const { error } = await supabase.rpc("record_my_attendance", {
       p_company_id: profile.company_id,
       p_mode: mode,
@@ -172,10 +253,45 @@ export default function EmployeeDashboard() {
     toast({ title: mode === "in" ? "Checked in" : "Checked out" });
     fetchAttendance(profile.company_id);
   };
+
+  useEffect(() => {
+    const attendanceId = (attendance as any)?.id as string | undefined;
+    const checkInAt = (attendance as any)?.check_in_at as string | null | undefined;
+    const checkOutAt = (attendance as any)?.check_out_at as string | null | undefined;
+    const scheduledEnd = ((attendance as any)?.scheduled_end as string | null | undefined) ?? ((profile as any)?.shift_end as string | null | undefined);
+    if (!attendanceId || !checkInAt || checkOutAt || !scheduledEnd || busy) return;
+    if (autoCheckoutDoneFor.current === attendanceId) return;
+
+    const timeParts = scheduledEnd.split(":").map((part) => Number(part));
+    if (timeParts.length < 2 || timeParts.some((part) => Number.isNaN(part))) return;
+
+    const [hours, minutes, seconds = 0] = timeParts;
+    const checkInDate = new Date(checkInAt);
+    const shiftEndDateTime = new Date(checkInDate);
+    shiftEndDateTime.setHours(hours, minutes, seconds, 0);
+
+    // If shift end time is earlier than check-in, treat it as an overnight shift.
+    if (shiftEndDateTime.getTime() < checkInDate.getTime()) {
+      shiftEndDateTime.setDate(shiftEndDateTime.getDate() + 1);
+    }
+
+    const autoCheckoutAtMs = shiftEndDateTime.getTime() + (15 * 60 * 1000);
+    if (nowTick < autoCheckoutAtMs) return;
+
+    autoCheckoutDoneFor.current = attendanceId;
+    void upsertAttendance("out");
+  }, [attendance, busy, nowTick, profile]);
   const breakUsedMinutes = Number((attendance as any)?.break_minutes ?? 0);
-  const remainingBreakMinutes = Math.max(0, 60 - breakUsedMinutes);
   const onBreak = !!(attendance as any)?.break_started_at;
-  const activeBreakMinutes = Number((attendance as any)?.break_selected_minutes ?? 0) || null;
+  const activeBreakMinutes = Number((attendance as any)?.break_selected_minutes ?? 0) || 0;
+  const activeBreakElapsedMinutes = useMemo(() => {
+    if (!onBreak || !(attendance as any)?.break_started_at) return 0;
+    return Math.max(0, Math.ceil((nowTick - new Date((attendance as any).break_started_at).getTime()) / 60000));
+  }, [attendance, nowTick, onBreak]);
+  const totalBreakUsedMinutes = Math.min(60, breakUsedMinutes + activeBreakElapsedMinutes);
+  const remainingBreakMinutes = Math.max(0, 60 - totalBreakUsedMinutes);
+  const activeBreakRemainingMinutes = onBreak ? Math.max(0, activeBreakMinutes - activeBreakElapsedMinutes) : 0;
+  const activeBreakProgress = onBreak && activeBreakMinutes > 0 ? `${activeBreakElapsedMinutes}/${activeBreakMinutes} min` : null;
 
   const toggleBreak = async () => {
     if (!user || !profile?.company_id) return;
@@ -214,13 +330,13 @@ export default function EmployeeDashboard() {
         activeAttendance = fallbackEntry ?? null;
       }
 
-      if (!activeAttendance?.id) {
-        setBusy(false);
-        toast({ title: "Break failed", description: "No active shift found. Please clock in first.", variant: "destructive" });
-        return;
-      }
+        if (!activeAttendance?.id) {
+          setBusy(false);
+          toast({ title: "Break failed", description: "No active shift found. Please clock in first.", variant: "destructive" });
+          return;
+        }
 
-      if (!onBreak) {
+        if (!onBreak) {
         const { error: startBreakError } = await supabase
           .from("attendance_entries")
           .update({
@@ -228,29 +344,32 @@ export default function EmployeeDashboard() {
             break_selected_minutes: selectedBreakMinutes,
           } as any)
           .eq("id", activeAttendance.id);
-        setBusy(false);
-        if (startBreakError) {
-          if (startBreakError.message.includes("break_started_at") || startBreakError.message.includes("break_selected_minutes")) {
+          setBusy(false);
+          if (startBreakError) {
+            if (startBreakError.message.includes("break_started_at") || startBreakError.message.includes("break_selected_minutes")) {
             toast({
               title: "Break unavailable",
               description: "Break tracking columns are missing in this company DB. Run the break tracking migration.",
               variant: "destructive",
             });
+              return;
+            }
+            toast({ title: "Break failed", description: startBreakError.message, variant: "destructive" });
             return;
           }
-          toast({ title: "Break failed", description: startBreakError.message, variant: "destructive" });
-          return;
-        }
-        toast({ title: "Break started" });
-      } else {
-        const usedMinutes = Number(activeAttendance.break_minutes ?? 0);
-        const selectedMinutes = Number(activeAttendance.break_selected_minutes ?? selectedBreakMinutes ?? 0);
-        const nextBreakMinutes = Math.min(60, usedMinutes + selectedMinutes);
-        const { error: endBreakError } = await supabase
-          .from("attendance_entries")
-          .update({
-            break_minutes: nextBreakMinutes,
-            break_started_at: null,
+          toast({ title: "Break started", description: `Remaining break: ${remainingBreakMinutes} min.` });
+        } else {
+          const usedMinutes = Number(activeAttendance.break_minutes ?? 0);
+          const startedAt = activeAttendance.break_started_at ? new Date(activeAttendance.break_started_at).getTime() : NaN;
+          const elapsedMinutes = Number.isFinite(startedAt)
+            ? Math.max(0, Math.ceil((Date.now() - startedAt) / 60000))
+            : 0;
+          const nextBreakMinutes = Math.min(60, usedMinutes + elapsedMinutes);
+          const { error: endBreakError } = await supabase
+            .from("attendance_entries")
+            .update({
+              break_minutes: nextBreakMinutes,
+              break_started_at: null,
             break_selected_minutes: null,
           } as any)
           .eq("id", activeAttendance.id);
@@ -265,23 +384,31 @@ export default function EmployeeDashboard() {
             return;
           }
           toast({ title: "Break failed", description: endBreakError.message, variant: "destructive" });
-          return;
+            return;
+          }
+          toast({
+            title: "Break ended",
+            description: `Break used: ${nextBreakMinutes} min. Remaining break: ${Math.max(0, 60 - nextBreakMinutes)} min.`,
+          });
         }
-        toast({ title: "Break ended" });
-      }
 
-      fetchAttendance(profile.company_id);
-      return;
+        fetchAttendance(profile.company_id);
+        return;
     }
 
     setBusy(false);
-    if (primaryRpc.error && secondaryRpc.error) {
-      toast({ title: "Break failed", description: "Break RPC failed and fallback was not possible.", variant: "destructive" });
-      return;
-    }
-    toast({ title: onBreak ? "Break ended" : "Break started" });
-    fetchAttendance(profile.company_id);
-  };
+      if (primaryRpc.error && secondaryRpc.error) {
+        toast({ title: "Break failed", description: "Break RPC failed and fallback was not possible.", variant: "destructive" });
+        return;
+      }
+      toast({
+        title: onBreak ? "Break ended" : "Break started",
+        description: onBreak
+          ? `Remaining break: ${remainingBreakMinutes} min.`
+          : `Remaining break: ${remainingBreakMinutes} min.`,
+      });
+      fetchAttendance(profile.company_id);
+    };
 
   const cards = [
     { title: "Profile Status", value: profile?.profile_completed ? "Complete" : "Incomplete", icon: User, color: profile?.profile_completed ? "text-success" : "text-warning" },
@@ -313,11 +440,6 @@ export default function EmployeeDashboard() {
       bg: onBreak ? "bg-amber-50" : "bg-emerald-50",
     },
   ];
-  const upcomingHolidays = [
-    { mon: "MAR", day: "20", name: "Spring Equinox" },
-    { mon: "APR", day: "01", name: "Easter Monday" },
-  ];
-
   const attendanceChartData = useMemo(() => {
     const map = new Map(attendanceRows.map((row) => [row.work_date, row]));
     const end = new Date();
@@ -363,14 +485,14 @@ export default function EmployeeDashboard() {
     if (profileEmploymentType === "part_time" && Number.isFinite(partTimeHours) && partTimeHours > 0) {
       return partTimeHours;
     }
-    return 9;
+    return 8;
   }, [profile]);
   const employmentLabel = useMemo(() => {
     const profileEmploymentType = (profile as any)?.employment_type;
     if (profileEmploymentType === "part_time") {
       return `Part Time (${targetShiftHours}h)`;
     }
-    return "Full Time (9h)";
+    return "Full Time (8h)";
   }, [profile, targetShiftHours]);
   const shiftProgress = useMemo(() => {
     const totalTargetMs = targetShiftHours * 60 * 60 * 1000;
@@ -386,15 +508,30 @@ export default function EmployeeDashboard() {
     () => [15, 30, 45, 60].filter((mins) => mins <= remainingBreakMinutes),
     [remainingBreakMinutes],
   );
+  const hasAvailableBreakOptions = availableBreakOptions.length > 0;
 
   return (
     <div className="space-y-6 animate-fade-in">
-      <div>
-        <h1 className="text-2xl font-bold">Welcome, {profile?.name || "Employee"}</h1>
-        <p className="text-muted-foreground">Your personal dashboard</p>
-        <p className="text-sm text-slate-600 mt-1">
-          Employment Type: <span className="font-semibold text-slate-900">{employmentLabel}</span>
-        </p>
+      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div>
+          <h1 className="text-2xl font-bold">Welcome, {profile?.name || "Employee"}</h1>
+          <p className="text-muted-foreground">Your personal dashboard</p>
+          <p className="text-sm text-slate-600 mt-1">
+            Employment Type: <span className="font-semibold text-slate-900">{employmentLabel}</span>
+          </p>
+        </div>
+        <div className="text-sm md:text-right">
+          <p className="font-semibold text-slate-900">Upcoming Holidays</p>
+          {upcomingHolidays.length === 0 ? (
+            <p className="text-muted-foreground">No upcoming holidays</p>
+          ) : (
+            upcomingHolidays.slice(0, 2).map((holiday) => (
+              <p key={`${holiday.name}-${holiday.rangeText}`} className="text-slate-600">
+                {holiday.name} <span className="text-slate-500">({holiday.rangeText})</span>
+              </p>
+            ))
+          )}
+        </div>
       </div>
 
       <Card className="overflow-hidden rounded-3xl">
@@ -426,32 +563,39 @@ export default function EmployeeDashboard() {
               <Button variant="outline" className="h-10 px-4 rounded-xl text-sm font-semibold" disabled={busy || !attendance?.check_in_at || !!attendance?.check_out_at} onClick={() => upsertAttendance("out")}>
                 <LogOut className="mr-2 h-4 w-4" /> Check Out
               </Button>
-              <select
-                className="h-10 rounded-xl border bg-background px-3 text-sm"
-                value={selectedBreakMinutes}
-                disabled={busy || onBreak || remainingBreakMinutes === 0}
-                onChange={(e) => setSelectedBreakMinutes(Number(e.target.value))}
-              >
-                {availableBreakOptions.map((mins) => (
-                  <option key={mins} value={mins}>
-                    {mins === 60 ? "1 hour break" : `${mins} min break`}
-                  </option>
-                ))}
-              </select>
-              <Button
-                variant="secondary"
-                className="h-10 px-4 rounded-xl text-sm font-semibold"
-                disabled={busy || !attendance?.check_in_at || !!attendance?.check_out_at || (!onBreak && remainingBreakMinutes === 0)}
-                onClick={() => void toggleBreak()}
-              >
+                <select
+                  className="h-10 rounded-xl border bg-background px-3 text-sm"
+                  value={hasAvailableBreakOptions ? selectedBreakMinutes : 0}
+                  disabled={busy || onBreak || !hasAvailableBreakOptions}
+                  onChange={(e) => setSelectedBreakMinutes(Number(e.target.value))}
+                >
+                  {hasAvailableBreakOptions ? (
+                    availableBreakOptions.map((mins) => (
+                      <option key={mins} value={mins}>
+                        {mins === 60 ? "1 hour break" : `${mins} min break`}
+                      </option>
+                    ))
+                  ) : (
+                    <option value={0} disabled>
+                      No break time remaining
+                    </option>
+                  )}
+                </select>
+                <Button
+                  variant="secondary"
+                  className="h-10 px-4 rounded-xl text-sm font-semibold"
+                  disabled={busy || !attendance?.check_in_at || !!attendance?.check_out_at || (!onBreak && !hasAvailableBreakOptions)}
+                  onClick={() => void toggleBreak()}
+                >
                 {onBreak ? "End Break" : "Start Break"}
               </Button>
-              <p className="w-full text-xs text-slate-600 mt-1">
-                Break limit: 60 min | Remaining: {remainingBreakMinutes} min
-                {onBreak && activeBreakMinutes ? ` | Active: ${activeBreakMinutes} min` : ""}
-              </p>
+                <p className="w-full text-xs text-slate-600 mt-1">
+                  Break limit: 60 min | Used: {totalBreakUsedMinutes} min | Remaining: {remainingBreakMinutes} min
+                  {onBreak && activeBreakMinutes ? ` | Active: ${activeBreakProgress}` : ""}
+                  {onBreak && activeBreakMinutes ? ` | Left on current break: ${activeBreakRemainingMinutes} min` : ""}
+                </p>
+              </div>
             </div>
-          </div>
         </CardContent>
       </Card>
 
@@ -489,28 +633,6 @@ export default function EmployeeDashboard() {
         ))}
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-1">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle>Upcoming Holidays</CardTitle>
-            <button className="text-sm text-blue-600 font-medium">View Calendar</button>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {upcomingHolidays.map((h) => (
-              <div key={h.name} className="rounded-xl border bg-muted/30 p-3 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="h-10 w-10 rounded-lg bg-white border flex flex-col items-center justify-center">
-                    <span className="text-[10px] font-bold text-slate-400">{h.mon}</span>
-                    <span className="text-xs font-bold">{h.day}</span>
-                  </div>
-                  <span className="font-semibold">{h.name}</span>
-                </div>
-                <span className="text-slate-300" aria-hidden="true">&#8599;</span>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
-      </div>
     </div>
   );
 }

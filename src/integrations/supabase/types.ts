@@ -53,6 +53,7 @@ export type Database = {
       employee_profiles: {
         Row: {
           address: string | null
+          allowed_clock_in_ip: string | null
           avatar_url: string | null
           company_id: string | null
           created_at: string
@@ -67,7 +68,10 @@ export type Database = {
           phone: string | null
           position: string | null
           profile_completed: boolean | null
+          restrict_clock_in_ip: boolean
           status: string
+          shift_end: string | null
+          shift_start: string | null
           updated_at: string
           user_id: string
           website: string | null
@@ -75,6 +79,7 @@ export type Database = {
         }
         Insert: {
           address?: string | null
+          allowed_clock_in_ip?: string | null
           avatar_url?: string | null
           company_id?: string | null
           created_at?: string
@@ -89,7 +94,10 @@ export type Database = {
           phone?: string | null
           position?: string | null
           profile_completed?: boolean | null
+          restrict_clock_in_ip?: boolean
           status?: string
+          shift_end?: string | null
+          shift_start?: string | null
           updated_at?: string
           user_id: string
           website?: string | null
@@ -97,6 +105,7 @@ export type Database = {
         }
         Update: {
           address?: string | null
+          allowed_clock_in_ip?: string | null
           avatar_url?: string | null
           company_id?: string | null
           created_at?: string
@@ -111,7 +120,10 @@ export type Database = {
           phone?: string | null
           position?: string | null
           profile_completed?: boolean | null
+          restrict_clock_in_ip?: boolean
           status?: string
+          shift_end?: string | null
+          shift_start?: string | null
           updated_at?: string
           user_id?: string
           website?: string | null
@@ -323,6 +335,147 @@ export type Database = {
           updated_by?: string | null
           user_id?: string
           work_date?: string
+        }
+        Relationships: []
+      }
+      chat_conversations: {
+        Row: {
+          company_id: string
+          created_at: string
+          created_by: string
+          id: string
+          is_group: boolean
+          last_message_at: string
+          title: string | null
+          updated_at: string
+        }
+        Insert: {
+          company_id: string
+          created_at?: string
+          created_by: string
+          id?: string
+          is_group?: boolean
+          last_message_at?: string
+          title?: string | null
+          updated_at?: string
+        }
+        Update: {
+          company_id?: string
+          created_at?: string
+          created_by?: string
+          id?: string
+          is_group?: boolean
+          last_message_at?: string
+          title?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      chat_participants: {
+        Row: {
+          conversation_id: string
+          id: string
+          joined_at: string
+          last_read_at: string | null
+          user_id: string
+        }
+        Insert: {
+          conversation_id: string
+          id?: string
+          joined_at?: string
+          last_read_at?: string | null
+          user_id: string
+        }
+        Update: {
+          conversation_id?: string
+          id?: string
+          joined_at?: string
+          last_read_at?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
+      chat_messages: {
+        Row: {
+          attachment_mime: string | null
+          attachment_name: string | null
+          attachment_path: string | null
+          content: string | null
+          conversation_id: string
+          created_at: string
+          id: string
+          sender_id: string
+        }
+        Insert: {
+          attachment_mime?: string | null
+          attachment_name?: string | null
+          attachment_path?: string | null
+          content?: string | null
+          conversation_id: string
+          created_at?: string
+          id?: string
+          sender_id: string
+        }
+        Update: {
+          attachment_mime?: string | null
+          attachment_name?: string | null
+          attachment_path?: string | null
+          content?: string | null
+          conversation_id?: string
+          created_at?: string
+          id?: string
+          sender_id?: string
+        }
+        Relationships: []
+      }
+      chat_message_reads: {
+        Row: {
+          id: string
+          message_id: string
+          read_at: string
+          user_id: string
+        }
+        Insert: {
+          id?: string
+          message_id: string
+          read_at?: string
+          user_id: string
+        }
+        Update: {
+          id?: string
+          message_id?: string
+          read_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      company_holidays: {
+        Row: {
+          company_id: string
+          created_at: string
+          created_by: string | null
+          date_from: string
+          date_to: string
+          id: string
+          name: string
+        }
+        Insert: {
+          company_id: string
+          created_at?: string
+          created_by?: string | null
+          date_from: string
+          date_to: string
+          id?: string
+          name: string
+        }
+        Update: {
+          company_id?: string
+          created_at?: string
+          created_by?: string | null
+          date_from?: string
+          date_to?: string
+          id?: string
+          name?: string
         }
         Relationships: []
       }

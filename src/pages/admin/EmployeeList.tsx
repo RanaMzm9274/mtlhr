@@ -39,6 +39,7 @@ import { absoluteAppUrl } from "@/lib/basePath";
 import { Line, LineChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
 import { usePortalSearch } from "@/contexts/PortalSearchContext";
+import { DocumentPreviewDialog } from "@/components/DocumentPreviewDialog";
 
 interface Employee extends ProfileRecord {
   id?: string;
@@ -63,6 +64,8 @@ export default function EmployeeList() {
   const [invitePosition, setInvitePosition] = useState("");
   const [inviteEmploymentType, setInviteEmploymentType] = useState<"full_time" | "part_time">("full_time");
   const [inviteWorkingHours, setInviteWorkingHours] = useState("6");
+  const [inviteRestrictClockInIp, setInviteRestrictClockInIp] = useState(false);
+  const [inviteAllowedClockInIp, setInviteAllowedClockInIp] = useState("");
   const [inviting, setInviting] = useState(false);
   const [filter, setFilter] = useState<"all" | "active" | "inactive" | "invited">("all");
   const [sortKey, setSortKey] = useState<SortKey>("created_at");
@@ -76,8 +79,27 @@ export default function EmployeeList() {
   const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
   const [employeeDocs, setEmployeeDocs] = useState<DocumentRecord[]>([]);
   const [attendanceRows, setAttendanceRows] = useState<Array<{ work_date: string; check_in_at: string | null; check_out_at: string | null }>>([]);
+  const [joinedDate, setJoinedDate] = useState<string>("-");
   const [profileLoading, setProfileLoading] = useState(false);
   const [attendanceRange, setAttendanceRange] = useState<AttendanceRange>("monthly");
+  const [profileRestrictClockInIp, setProfileRestrictClockInIp] = useState(false);
+  const [profileAllowedClockInIp, setProfileAllowedClockInIp] = useState("");
+  const [savingProfileIp, setSavingProfileIp] = useState(false);
+  const [profileForm, setProfileForm] = useState({
+    name: "",
+    phone: "",
+    position: "",
+    gender: "",
+    id_passport: "",
+    status: "invited",
+    employment_type: "full_time" as "full_time" | "part_time",
+    working_hours: "8",
+    shift_start: "09:00",
+    shift_end: "17:00",
+  });
+  const [savingProfileBasics, setSavingProfileBasics] = useState(false);
+  const [previewDocument, setPreviewDocument] = useState<DocumentRecord | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
 
   const fetchEmployees = async () => {
     try {
@@ -115,6 +137,8 @@ export default function EmployeeList() {
     setInvitePosition("");
     setInviteEmploymentType("full_time");
     setInviteWorkingHours("6");
+    setInviteRestrictClockInIp(false);
+    setInviteAllowedClockInIp("");
   };
 
   const getFunctionAuthHeaders = async () => {
@@ -141,6 +165,14 @@ export default function EmployeeList() {
         return;
       }
     }
+    if (inviteRestrictClockInIp && !inviteAllowedClockInIp.trim()) {
+      toast({
+        title: "IP required",
+        description: "Enter an allowed IP when clock-in IP restriction is enabled.",
+        variant: "destructive",
+      });
+      return;
+    }
     setInviting(true);
     try {
       const headers = await getFunctionAuthHeaders();
@@ -153,6 +185,8 @@ export default function EmployeeList() {
             position: invitePosition.trim(),
             employment_type: inviteEmploymentType,
             working_hours: inviteEmploymentType === "part_time" ? Number(inviteWorkingHours) : null,
+            restrict_clock_in_ip: inviteRestrictClockInIp,
+            allowed_clock_in_ip: inviteRestrictClockInIp ? inviteAllowedClockInIp.trim() : null,
             redirectTo: absoluteAppUrl("/set-password"),
           },
         }),
@@ -267,11 +301,26 @@ export default function EmployeeList() {
       setSelectedEmployee(employee);
       setEmployeeDocs([]);
       setAttendanceRows([]);
+      setJoinedDate(employee.created_at ? new Date(employee.created_at).toLocaleDateString() : "-");
       return;
     }
 
     setProfileLoading(true);
     setSelectedEmployee(employee);
+    setProfileForm({
+      name: employee.name || "",
+      phone: employee.phone || "",
+      position: employee.position || "",
+      gender: employee.gender || "",
+      id_passport: employee.id_passport || "",
+      status: employee.status || "invited",
+      employment_type: employee.employment_type === "part_time" ? "part_time" : "full_time",
+      working_hours: employee.working_hours ? String(employee.working_hours) : "8",
+      shift_start: employee.shift_start || "09:00",
+      shift_end: employee.shift_end || "17:00",
+    });
+    setProfileRestrictClockInIp(!!employee.restrict_clock_in_ip);
+    setProfileAllowedClockInIp(employee.allowed_clock_in_ip ?? "");
     try {
       const toDate = new Date();
       const fromDate = new Date();
@@ -281,7 +330,7 @@ export default function EmployeeList() {
       const from = fromDate.toISOString().slice(0, 10);
       const to = toDate.toISOString().slice(0, 10);
 
-      const [{ data: docs, error: docsError }, { data: attendance, error: attendanceError }] = await withTimeoutFallback(
+      const [{ data: docs, error: docsError }, { data: attendance, error: attendanceError }, { data: firstShift, error: firstShiftError }] = await withTimeoutFallback(
         Promise.all([
           supabase.from("documents").select("*").eq("user_id", employee.user_id).order("uploaded_at", { ascending: false }),
           supabase
@@ -291,40 +340,157 @@ export default function EmployeeList() {
             .gte("work_date", from)
             .lte("work_date", to)
             .order("work_date", { ascending: true }),
+          supabase
+            .from("attendance_entries")
+            .select("work_date")
+            .eq("user_id", employee.user_id)
+            .order("work_date", { ascending: true })
+            .limit(1)
+            .maybeSingle(),
         ]),
-        [{ data: [], error: null }, { data: [], error: null }] as any,
+        [{ data: [], error: null }, { data: [], error: null }, { data: null, error: null }] as any,
         SUPABASE_REQUEST_TIMEOUT_MS,
       );
 
       if (docsError) throw docsError;
       if (attendanceError) throw attendanceError;
+      if (firstShiftError) throw firstShiftError;
 
       setEmployeeDocs(((docs as any[]) ?? []).map((doc) => normalizeDocumentRecord(doc)));
       setAttendanceRows((attendance as Array<{ work_date: string; check_in_at: string | null; check_out_at: string | null }>) ?? []);
+      const firstShiftDate = (firstShift as any)?.work_date as string | undefined;
+      setJoinedDate(firstShiftDate ? new Date(`${firstShiftDate}T00:00:00`).toLocaleDateString() : (employee.created_at ? new Date(employee.created_at).toLocaleDateString() : "-"));
     } catch (err: any) {
       toast({ title: "Failed to load profile", description: err.message, variant: "destructive" });
       setEmployeeDocs([]);
       setAttendanceRows([]);
+      setJoinedDate(employee.created_at ? new Date(employee.created_at).toLocaleDateString() : "-");
     } finally {
       setProfileLoading(false);
     }
   };
 
-  const downloadDocument = async (doc: DocumentRecord) => {
-    if (!doc.storage_path) {
-      toast({ title: "Download unavailable", description: "Storage path is missing for this file.", variant: "destructive" });
+  const saveSelectedEmployeeIpRestriction = async () => {
+    if (!selectedEmployee?.id) {
+      toast({ title: "Save failed", description: "No employee profile selected.", variant: "destructive" });
       return;
     }
-    const { data, error } = await withTimeout(
-      supabase.storage.from("documents").createSignedUrl(doc.storage_path, 60),
-      SUPABASE_REQUEST_TIMEOUT_MS,
-      "Document download",
-    );
+    if (profileRestrictClockInIp && !profileAllowedClockInIp.trim()) {
+      toast({ title: "IP required", description: "Enter an allowed IP when restriction is enabled.", variant: "destructive" });
+      return;
+    }
+
+    setSavingProfileIp(true);
+    const { error } = await supabase
+      .from("employee_profiles")
+      .update({
+        restrict_clock_in_ip: profileRestrictClockInIp,
+        allowed_clock_in_ip: profileRestrictClockInIp ? profileAllowedClockInIp.trim() : null,
+      })
+      .eq("id", selectedEmployee.id);
+    setSavingProfileIp(false);
+
     if (error) {
-      toast({ title: "Download failed", description: error.message, variant: "destructive" });
+      toast({ title: "Save failed", description: error.message, variant: "destructive" });
       return;
     }
-    if (data?.signedUrl) window.open(data.signedUrl, "_blank");
+
+    const nextAllowedIp = profileRestrictClockInIp ? profileAllowedClockInIp.trim() : null;
+    setEmployees((prev) =>
+      prev.map((employee) =>
+        employee.id === selectedEmployee.id
+          ? { ...employee, restrict_clock_in_ip: profileRestrictClockInIp, allowed_clock_in_ip: nextAllowedIp }
+          : employee,
+      ),
+    );
+    setSelectedEmployee((prev) =>
+      prev ? { ...prev, restrict_clock_in_ip: profileRestrictClockInIp, allowed_clock_in_ip: nextAllowedIp } : prev,
+    );
+    toast({ title: "IP restriction updated" });
+  };
+
+  const saveSelectedEmployeeProfile = async () => {
+    if (!selectedEmployee?.id) {
+      toast({ title: "Save failed", description: "No employee profile selected.", variant: "destructive" });
+      return;
+    }
+
+    const employmentType = profileForm.employment_type === "part_time" ? "part_time" : "full_time";
+    const parsedWorkingHours = Number(profileForm.working_hours);
+    if (employmentType === "part_time" && (!Number.isFinite(parsedWorkingHours) || parsedWorkingHours < 1 || parsedWorkingHours > 12)) {
+      toast({
+        title: "Invalid working hours",
+        description: "Part-time employees must have working hours between 1 and 12.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const timeRegex = /^([01]\d|2[0-3]):([0-5]\d)$/;
+    if (!timeRegex.test(profileForm.shift_start) || !timeRegex.test(profileForm.shift_end)) {
+      toast({
+        title: "Invalid shift timing",
+        description: "Shift start and end must be valid times in HH:MM format.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (profileForm.shift_end <= profileForm.shift_start) {
+      toast({
+        title: "Invalid shift timing",
+        description: "Shift end time must be later than shift start time.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setSavingProfileBasics(true);
+    const { data, error } = await supabase
+      .from("employee_profiles")
+      .update({
+        name: profileForm.name.trim(),
+        phone: profileForm.phone.trim(),
+        position: profileForm.position.trim(),
+        gender: profileForm.gender,
+        id_passport: profileForm.id_passport.trim(),
+        status: profileForm.status,
+        employment_type: employmentType,
+        working_hours: employmentType === "part_time" ? parsedWorkingHours : null,
+        shift_start: profileForm.shift_start,
+        shift_end: profileForm.shift_end,
+      })
+      .eq("id", selectedEmployee.id)
+      .select("*")
+      .single();
+    setSavingProfileBasics(false);
+
+    if (error) {
+      toast({ title: "Save failed", description: error.message, variant: "destructive" });
+      return;
+    }
+
+    const updated = normalizeProfileRecord(data as any);
+    setEmployees((prev) =>
+      prev.map((employee) =>
+        employee.id === selectedEmployee.id
+          ? { ...employee, ...updated }
+          : employee,
+      ),
+    );
+    setSelectedEmployee((prev) => (prev ? { ...prev, ...updated } : prev));
+    setProfileForm({
+      name: updated.name || "",
+      phone: updated.phone || "",
+      position: updated.position || "",
+      gender: updated.gender || "",
+      id_passport: updated.id_passport || "",
+      status: updated.status || "invited",
+      employment_type: updated.employment_type === "part_time" ? "part_time" : "full_time",
+      working_hours: updated.working_hours ? String(updated.working_hours) : "8",
+      shift_start: updated.shift_start || "09:00",
+      shift_end: updated.shift_end || "17:00",
+    });
+    toast({ title: "Employee profile updated" });
   };
 
   const attendanceChartData = useMemo(() => {
@@ -447,6 +613,27 @@ export default function EmployeeList() {
                     onChange={(e) => setInviteWorkingHours(e.target.value)}
                     required
                     placeholder="e.g. 6"
+                  />
+                </div>
+              )}
+              <div className="space-y-2">
+                <Label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={inviteRestrictClockInIp}
+                    onChange={(e) => setInviteRestrictClockInIp(e.target.checked)}
+                  />
+                  Restrict clock-in to one IP
+                </Label>
+              </div>
+              {inviteRestrictClockInIp && (
+                <div className="space-y-2">
+                  <Label>Allowed Clock-in IP</Label>
+                  <Input
+                    value={inviteAllowedClockInIp}
+                    onChange={(e) => setInviteAllowedClockInIp(e.target.value)}
+                    required
+                    placeholder="e.g. 203.0.113.10"
                   />
                 </div>
               )}
@@ -591,13 +778,16 @@ export default function EmployeeList() {
       </Card>
 
       <Dialog open={profileOpen} onOpenChange={setProfileOpen}>
-        <DialogContent className="sm:max-w-6xl">
+        <DialogContent className="w-[calc(100vw-1rem)] max-w-6xl h-[calc(100vh-1rem)] sm:h-[90vh] overflow-hidden p-0 flex flex-col">
+          <div className="p-6 border-b shrink-0">
           <DialogHeader>
             <DialogTitle>Employee Profile</DialogTitle>
             <DialogDescription>
               Full employee details, attached documents, and recent attendance report.
             </DialogDescription>
           </DialogHeader>
+          </div>
+          <div className="flex-1 overflow-y-auto overflow-x-hidden p-6">
           {profileLoading ? (
             <div className="py-10">
               <Loader2 className="animate-spin mx-auto" />
@@ -605,32 +795,142 @@ export default function EmployeeList() {
           ) : !selectedEmployee ? (
             <p className="text-sm text-muted-foreground">No employee selected.</p>
           ) : (
-            <div className="grid gap-6 lg:grid-cols-2">
-              <div className="space-y-4">
-                <Card>
+            <div className="grid gap-6 grid-cols-1 xl:grid-cols-2">
+              <div className="space-y-4 min-w-0">
+                <Card className="min-w-0 overflow-hidden">
                   <CardContent className="pt-6">
                     <div className="grid sm:grid-cols-2 gap-3 text-sm">
-                      <div><span className="text-muted-foreground">Name:</span> <span className="font-medium">{selectedEmployee.name || "-"}</span></div>
-                      <div><span className="text-muted-foreground">Email:</span> <span className="font-medium">{selectedEmployee.email || "-"}</span></div>
-                      <div><span className="text-muted-foreground">Phone:</span> <span>{selectedEmployee.phone || "-"}</span></div>
-                      <div><span className="text-muted-foreground">Position:</span> <span>{selectedEmployee.position || "-"}</span></div>
-                      <div>
-                        <span className="text-muted-foreground">Employment:</span>{" "}
-                        <span>{selectedEmployee.employment_type === "part_time" ? "Part Time" : "Full Time"}</span>
+                      <div className="space-y-1">
+                        <Label>Name</Label>
+                        <Input value={profileForm.name} onChange={(e) => setProfileForm((prev) => ({ ...prev, name: e.target.value }))} />
                       </div>
-                      <div>
-                        <span className="text-muted-foreground">Shift Hours:</span>{" "}
-                        <span>{selectedEmployee.employment_type === "part_time" ? `${selectedEmployee.working_hours ?? "-"}h` : "9h (incl. break)"}</span>
+                      <div className="space-y-1">
+                        <Label>Email</Label>
+                        <Input value={selectedEmployee.email || ""} disabled className="bg-muted" />
                       </div>
-                      <div><span className="text-muted-foreground">Gender:</span> <span className="capitalize">{selectedEmployee.gender || "-"}</span></div>
-                      <div><span className="text-muted-foreground">ID / Passport:</span> <span>{selectedEmployee.id_passport || "-"}</span></div>
-                      <div><span className="text-muted-foreground">Status:</span> <span className="capitalize">{selectedEmployee.status || "-"}</span></div>
-                      <div><span className="text-muted-foreground">Joined:</span> <span>{selectedEmployee.created_at ? new Date(selectedEmployee.created_at).toLocaleDateString() : "-"}</span></div>
+                      <div className="space-y-1">
+                        <Label>Phone</Label>
+                        <Input value={profileForm.phone} onChange={(e) => setProfileForm((prev) => ({ ...prev, phone: e.target.value }))} />
+                      </div>
+                      <div className="space-y-1">
+                        <Label>Position</Label>
+                        <Input value={profileForm.position} onChange={(e) => setProfileForm((prev) => ({ ...prev, position: e.target.value }))} />
+                      </div>
+                      <div className="space-y-1">
+                        <Label>Employment Type</Label>
+                        <Select
+                          value={profileForm.employment_type}
+                          onValueChange={(value: "full_time" | "part_time") => setProfileForm((prev) => ({ ...prev, employment_type: value }))}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="full_time">Full Time</SelectItem>
+                            <SelectItem value="part_time">Part Time</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-1">
+                        <Label>Shift Hours</Label>
+                        {profileForm.employment_type === "part_time" ? (
+                          <Input
+                            type="number"
+                            min={1}
+                            max={12}
+                            step="0.5"
+                            value={profileForm.working_hours}
+                            onChange={(e) => setProfileForm((prev) => ({ ...prev, working_hours: e.target.value }))}
+                          />
+                        ) : (
+                          <Input value="8h (incl. break)" disabled className="bg-muted" />
+                        )}
+                      </div>
+                      <div className="space-y-1">
+                        <Label>Shift Start</Label>
+                        <Input
+                          type="time"
+                          value={profileForm.shift_start}
+                          onChange={(e) => setProfileForm((prev) => ({ ...prev, shift_start: e.target.value }))}
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label>Shift End</Label>
+                        <Input
+                          type="time"
+                          value={profileForm.shift_end}
+                          onChange={(e) => setProfileForm((prev) => ({ ...prev, shift_end: e.target.value }))}
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label>Gender</Label>
+                        <Select value={profileForm.gender || "unspecified"} onValueChange={(value) => setProfileForm((prev) => ({ ...prev, gender: value === "unspecified" ? "" : value }))}>
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="unspecified">Unspecified</SelectItem>
+                            <SelectItem value="male">Male</SelectItem>
+                            <SelectItem value="female">Female</SelectItem>
+                            <SelectItem value="other">Other</SelectItem>
+                            <SelectItem value="prefer_not_to_say">Prefer not to say</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-1">
+                        <Label>ID / Passport</Label>
+                        <Input value={profileForm.id_passport} onChange={(e) => setProfileForm((prev) => ({ ...prev, id_passport: e.target.value }))} />
+                      </div>
+                      <div className="space-y-1">
+                        <Label>Status</Label>
+                        <Select value={profileForm.status} onValueChange={(value) => setProfileForm((prev) => ({ ...prev, status: value }))}>
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="active">Active</SelectItem>
+                            <SelectItem value="inactive">Inactive</SelectItem>
+                            <SelectItem value="invited">Invited</SelectItem>
+                            <SelectItem value="pending">Pending</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-1">
+                        <Label>Joined</Label>
+                        <Input value={joinedDate} disabled className="bg-muted" />
+                      </div>
+                    </div>
+                    <div className="mt-4">
+                      <Button onClick={saveSelectedEmployeeProfile} disabled={savingProfileBasics}>
+                        {savingProfileBasics ? "Saving..." : "Save Profile"}
+                      </Button>
+                    </div>
+                    <div className="mt-4 border-t pt-4 space-y-3">
+                      <p className="text-sm font-medium">Clock-in IP Restriction</p>
+                      <Label className="flex items-center gap-2 text-sm">
+                        <input
+                          type="checkbox"
+                          checked={profileRestrictClockInIp}
+                          onChange={(e) => setProfileRestrictClockInIp(e.target.checked)}
+                        />
+                        Restrict this employee to one IP for clock-in
+                      </Label>
+                      <div className="flex flex-col sm:flex-row gap-2">
+                        <Input
+                          value={profileAllowedClockInIp}
+                          onChange={(e) => setProfileAllowedClockInIp(e.target.value)}
+                          placeholder="Allowed IP"
+                          disabled={!profileRestrictClockInIp}
+                        />
+                        <Button onClick={saveSelectedEmployeeIpRestriction} disabled={savingProfileIp}>
+                          {savingProfileIp ? "Saving..." : "Save IP Restriction"}
+                        </Button>
+                      </div>
                     </div>
                   </CardContent>
                 </Card>
 
-                <Card>
+                <Card className="min-w-0 overflow-hidden">
                   <CardHeader>
                     <p className="font-medium">Attached Documents</p>
                   </CardHeader>
@@ -644,7 +944,16 @@ export default function EmployeeList() {
                             <p className="text-sm font-medium">{doc.file_name || "Untitled"}</p>
                             <p className="text-xs text-muted-foreground">{doc.category} · {new Date(doc.uploaded_at).toLocaleDateString()}</p>
                           </div>
-                          <Button size="sm" variant="outline" onClick={() => downloadDocument(doc)}>View</Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              setPreviewDocument(doc);
+                              setPreviewOpen(true);
+                            }}
+                          >
+                            View
+                          </Button>
                         </div>
                       ))
                     )}
@@ -652,13 +961,13 @@ export default function EmployeeList() {
                 </Card>
               </div>
 
-              <Card>
+              <Card className="min-w-0 overflow-hidden">
                 <CardHeader>
-                  <div className="flex items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <p className="font-medium">
                       Attendance Report ({attendanceRange === "daily" ? "Daily" : attendanceRange === "weekly" ? "Weekly" : "Monthly"})
                     </p>
-                    <div className="flex gap-2">
+                    <div className="flex flex-wrap gap-2">
                       <Button size="sm" variant={attendanceRange === "daily" ? "default" : "outline"} onClick={() => setAttendanceRange("daily")}>Daily</Button>
                       <Button size="sm" variant={attendanceRange === "weekly" ? "default" : "outline"} onClick={() => setAttendanceRange("weekly")}>Weekly</Button>
                       <Button size="sm" variant={attendanceRange === "monthly" ? "default" : "outline"} onClick={() => setAttendanceRange("monthly")}>Monthly</Button>
@@ -687,8 +996,18 @@ export default function EmployeeList() {
               </Card>
             </div>
           )}
+          </div>
         </DialogContent>
       </Dialog>
+
+      <DocumentPreviewDialog
+        document={previewDocument}
+        open={previewOpen}
+        onOpenChange={(open) => {
+          setPreviewOpen(open);
+          if (!open) setPreviewDocument(null);
+        }}
+      />
 
       <AlertDialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) handleDeleteCancel(); }}>
         <AlertDialogContent>

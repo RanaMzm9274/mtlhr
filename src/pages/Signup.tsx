@@ -45,7 +45,11 @@ export default function Signup() {
     setLoading(true);
     try {
       await signUpCompany({ name, email: signupEmail, password: signupPassword, companyName });
-      toast({ title: "Company signup submitted", description: "Your company is pending super admin approval." });
+      toast({
+        title: "Company signup submitted",
+        description: "Your company is pending super admin approval.",
+        className: "fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2",
+      });
       setName("");
       setCompanyName("");
       setSignupEmail("");

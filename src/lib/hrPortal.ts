@@ -21,6 +21,10 @@ export interface ProfileRecord {
   created_at?: string;
   employment_type?: "full_time" | "part_time";
   working_hours?: number | null;
+  shift_start?: string | null;
+  shift_end?: string | null;
+  restrict_clock_in_ip?: boolean;
+  allowed_clock_in_ip?: string | null;
 }
 
 export interface DocumentRecord {
@@ -120,6 +124,10 @@ export const normalizeProfileRecord = (row: AnyRecord, user?: Pick<User, "email"
         : Number.isFinite(Number(row?.working_hours))
           ? Number(row.working_hours)
           : null,
+    shift_start: firstNullableString(row?.shift_start),
+    shift_end: firstNullableString(row?.shift_end),
+    restrict_clock_in_ip: !!row?.restrict_clock_in_ip,
+    allowed_clock_in_ip: firstNullableString(row?.allowed_clock_in_ip),
   };
 
   if (!row?.profile_completed) {
@@ -294,7 +302,7 @@ export const requestDocumentSignedUrl = async (
   storagePath: string,
   expiresIn = 300,
 ) => {
-  const normalizedPath = firstString(storagePath);
+  const normalizedPath = normalizeStoragePath(storagePath);
   if (!normalizedPath) {
     throw new Error("This document record has no storage path.");
   }
@@ -314,6 +322,16 @@ export const requestDocumentSignedUrl = async (
   }
 
   return data.signedUrl;
+};
+
+export const normalizeStoragePath = (value?: string | null) => {
+  const raw = firstString(value);
+  if (!raw) return "";
+  if (!/^https?:\/\//i.test(raw)) return raw;
+  const marker = "/documents/";
+  const index = raw.indexOf(marker);
+  if (index === -1) return raw;
+  return raw.slice(index + marker.length);
 };
 
 export const indexProfilesByUserId = (profiles: AnyRecord[] = [], users: Array<Pick<User, "id" | "email" | "user_metadata">> = []) => {
