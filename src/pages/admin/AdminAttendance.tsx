@@ -20,6 +20,7 @@ interface EmployeeRow {
   user_id: string;
   name: string;
   email: string;
+  allowed_clock_in_ip?: string | null;
 }
 
 interface AttendanceRow {
@@ -34,6 +35,8 @@ interface AttendanceRow {
   break_started_at: string | null;
   break_selected_minutes: number | null;
   manual_work_hours: number | null;
+  clock_in_ip?: string | null;
+  allowed_clock_in_ip_at_clock_in?: string | null;
 }
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -81,8 +84,13 @@ export default function AdminAttendance() {
       manual_work_hours: typeof row?.manual_work_hours === "number" ? row.manual_work_hours : null,
     })) as AttendanceRow[];
 
-  const isMissingBreakColumnsError = (message?: string) =>
-    !!message && (message.includes("break_minutes") || message.includes("break_started_at") || message.includes("break_selected_minutes"));
+  const isMissingOptionalAttendanceColumnsError = (message?: string) =>
+    !!message &&
+    (message.includes("break_minutes") ||
+      message.includes("break_started_at") ||
+      message.includes("break_selected_minutes") ||
+      message.includes("clock_in_ip") ||
+      message.includes("allowed_clock_in_ip_at_clock_in"));
 
   const getBreakElapsedMinutes = (row: AttendanceRow) => {
     if (!row.break_started_at) return 0;
@@ -101,12 +109,12 @@ export default function AdminAttendance() {
   const fetchData = async () => {
     if (!companyId) return;
     const [{ data: empRows }, { data: attRows, error: attError }] = await Promise.all([
-      supabase.from("employee_profiles").select("user_id,name,email").eq("company_id", companyId).order("name", { ascending: true }),
-      supabase.from("attendance_entries").select("id,user_id,work_date,scheduled_start,scheduled_end,check_in_at,check_out_at,break_minutes,break_started_at,break_selected_minutes,manual_work_hours").eq("company_id", companyId).eq("work_date", date),
+      supabase.from("employee_profiles").select("user_id,name,email,allowed_clock_in_ip").eq("company_id", companyId).order("name", { ascending: true }),
+      supabase.from("attendance_entries").select("id,user_id,work_date,scheduled_start,scheduled_end,check_in_at,check_out_at,break_minutes,break_started_at,break_selected_minutes,manual_work_hours,clock_in_ip,allowed_clock_in_ip_at_clock_in").eq("company_id", companyId).eq("work_date", date),
     ]);
 
     let normalizedAttendance = normalizeAttendanceRows((attRows as any[]) ?? []);
-    if (attError && isMissingBreakColumnsError(attError.message)) {
+    if (attError && isMissingOptionalAttendanceColumnsError(attError.message)) {
       const { data: fallbackRows, error: fallbackError } = await supabase
         .from("attendance_entries")
         .select("id,user_id,work_date,scheduled_start,scheduled_end,check_in_at,check_out_at")
@@ -323,7 +331,7 @@ export default function AdminAttendance() {
     const [{ data, error }, { data: holidayRows, error: holidayError }] = await Promise.all([
       supabase
         .from("attendance_entries")
-        .select("id,user_id,work_date,scheduled_start,scheduled_end,check_in_at,check_out_at,break_minutes,break_started_at,break_selected_minutes,manual_work_hours")
+        .select("id,user_id,work_date,scheduled_start,scheduled_end,check_in_at,check_out_at,break_minutes,break_started_at,break_selected_minutes,manual_work_hours,clock_in_ip,allowed_clock_in_ip_at_clock_in")
         .eq("company_id", companyId)
         .eq("user_id", reportEmployeeId)
         .gte("work_date", range.from)
@@ -337,7 +345,7 @@ export default function AdminAttendance() {
         .gte("date_to", range.from),
     ]);
 
-    if (error && isMissingBreakColumnsError(error.message)) {
+    if (error && isMissingOptionalAttendanceColumnsError(error.message)) {
       const { data: fallbackData, error: fallbackError } = await supabase
         .from("attendance_entries")
         .select("id,user_id,work_date,scheduled_start,scheduled_end,check_in_at,check_out_at")
@@ -399,6 +407,8 @@ export default function AdminAttendance() {
           break_started_at: null,
           break_selected_minutes: null,
           manual_work_hours: null,
+          clock_in_ip: null,
+          allowed_clock_in_ip_at_clock_in: null,
         } as AttendanceRow;
       });
   }, [reportRows, reportEmployeeId, reportPreset, customFromDate, customToDate]);
@@ -465,6 +475,10 @@ export default function AdminAttendance() {
   const selectedEntry = useMemo(
     () => (selectedEmployee ? attendance.get(selectedEmployee.user_id) : undefined),
     [attendance, selectedEmployee],
+  );
+  const reportEmployee = useMemo(
+    () => employees.find((employee) => employee.user_id === reportEmployeeId) ?? null,
+    [employees, reportEmployeeId],
   );
 
   return (
@@ -535,6 +549,7 @@ export default function AdminAttendance() {
               </div>
               <p className="text-xs text-muted-foreground">
                 In: {selectedEntry?.check_in_at ? new Date(selectedEntry.check_in_at).toLocaleString() : "-"} | Out: {selectedEntry?.check_out_at ? new Date(selectedEntry.check_out_at).toLocaleString() : "-"}
+                {selectedEntry?.clock_in_ip ? ` | Used IP: ${selectedEntry.clock_in_ip}` : ""}
                 {typeof selectedEntry?.manual_work_hours === "number" ? ` | Manual hours: ${selectedEntry.manual_work_hours}` : ""}
                 {saving === selectedEmployee.user_id ? " | Saving..." : ""}
               </p>
@@ -597,6 +612,7 @@ export default function AdminAttendance() {
                   <tr>
                     <th className="text-left p-2">Date</th>
                     <th className="text-left p-2">Check-in</th>
+                    <th className="text-left p-2">Clock-in IP</th>
                     <th className="text-left p-2">Check-out</th>
                     <th className="text-left p-2">Break</th>
                     <th className="text-left p-2">Manual Hours</th>
@@ -608,6 +624,18 @@ export default function AdminAttendance() {
                     <tr key={row.id} className="border-t">
                       <td className="p-2">{new Date(row.work_date).toLocaleDateString()}</td>
                       <td className="p-2">{getDisplayCheckIn(row)}</td>
+                      <td className="p-2">
+                        {(() => {
+                          const allowedIp = row.allowed_clock_in_ip_at_clock_in || reportEmployee?.allowed_clock_in_ip || "";
+                          const isOtherIp = !!row.clock_in_ip && !!allowedIp && row.clock_in_ip !== allowedIp;
+                          if (!row.clock_in_ip) return "-";
+                          return (
+                            <span className={isOtherIp ? "font-medium text-destructive" : ""}>
+                              {row.clock_in_ip}{isOtherIp ? ` (other IP, allowed ${allowedIp})` : ""}
+                            </span>
+                          );
+                        })()}
+                      </td>
                       <td className="p-2">{getDisplayCheckOut(row)}</td>
                       <td className="p-2">
                         {getBreakUsedMinutes(row) > 0 ? `${getBreakUsedMinutes(row)} min` : "-"}
@@ -619,7 +647,7 @@ export default function AdminAttendance() {
                   ))}
                   {reportDisplayRows.length === 0 && (
                     <tr>
-                      <td className="p-3 text-muted-foreground" colSpan={6}>No attendance found for selected range.</td>
+                      <td className="p-3 text-muted-foreground" colSpan={7}>No attendance found for selected range.</td>
                     </tr>
                   )}
                 </tbody>

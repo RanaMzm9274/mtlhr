@@ -296,6 +296,8 @@ export type Database = {
       attendance_entries: {
         Row: {
           check_in_at: string | null
+          clock_in_ip: string | null
+          allowed_clock_in_ip_at_clock_in: string | null
           check_out_at: string | null
           company_id: string
           created_at: string
@@ -310,6 +312,8 @@ export type Database = {
         }
         Insert: {
           check_in_at?: string | null
+          clock_in_ip?: string | null
+          allowed_clock_in_ip_at_clock_in?: string | null
           check_out_at?: string | null
           company_id: string
           created_at?: string
@@ -324,6 +328,8 @@ export type Database = {
         }
         Update: {
           check_in_at?: string | null
+          clock_in_ip?: string | null
+          allowed_clock_in_ip_at_clock_in?: string | null
           check_out_at?: string | null
           company_id?: string
           created_at?: string

@@ -123,14 +123,14 @@ function AppSidebar() {
                   className={
                     collapsed
                       ? "h-9 w-9 rounded-md border border-sidebar-border bg-white/5 flex items-center justify-center overflow-hidden"
-                      : "h-[50px] w-[120px] rounded-md border border-sidebar-border bg-white/5 flex items-center justify-center overflow-hidden shrink-0"
+                      : "h-14 w-full max-w-[160px] rounded-md border border-sidebar-border bg-white/5 flex items-center justify-center overflow-hidden shrink-0"
                   }
                 >
                   {companyLogoUrl ? (
                     <img
                       src={companyLogoUrl}
                       alt={companyName}
-                      className="h-full w-full object-cover"
+                      className="h-full w-full object-contain p-1"
                     />
                   ) : (
                   <div className="h-full w-full bg-sidebar-primary/20 text-sidebar-primary flex items-center justify-center text-sm font-semibold">

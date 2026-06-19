@@ -44,13 +44,52 @@ import { DocumentPreviewDialog } from "@/components/DocumentPreviewDialog";
 interface Employee extends ProfileRecord {
   id?: string;
   user_id?: string;
+  last_clock_in_ip?: string | null;
+  last_clock_in_allowed_ip?: string | null;
+  last_clock_in_date?: string | null;
 }
+
+type AttendanceIpRow = {
+  user_id: string;
+  work_date: string;
+  check_in_at: string | null;
+  clock_in_ip?: string | null;
+  allowed_clock_in_ip_at_clock_in?: string | null;
+};
+
+type ProfileAttendanceRow = {
+  work_date: string;
+  check_in_at: string | null;
+  check_out_at: string | null;
+  clock_in_ip?: string | null;
+  allowed_clock_in_ip_at_clock_in?: string | null;
+};
 
 type SortKey = "name" | "email" | "status" | "created_at" | "position";
 type SortDir = "asc" | "desc";
 type AttendanceRange = "daily" | "weekly" | "monthly";
 
 const PAGE_SIZE = 10;
+
+const formatTimeValue = (value?: string | null) => {
+  if (!value) return "-";
+  return value.slice(0, 5);
+};
+
+const formatEmployeeSettings = (employee: Pick<Employee, "employment_type" | "working_hours" | "shift_start" | "shift_end" | "restrict_clock_in_ip" | "allowed_clock_in_ip" | "last_clock_in_ip" | "last_clock_in_allowed_ip">) => {
+  const employment =
+    employee.employment_type === "part_time"
+      ? `Part time${employee.working_hours ? ` (${employee.working_hours}h)` : ""}`
+      : "Full time";
+  const shift = `${formatTimeValue(employee.shift_start)}-${formatTimeValue(employee.shift_end)}`;
+  const ip = employee.restrict_clock_in_ip
+    ? `IP restricted${employee.allowed_clock_in_ip ? `: ${employee.allowed_clock_in_ip}` : ""}`
+    : "IP unrestricted";
+  const usedIp = employee.last_clock_in_ip || "";
+  const allowedAtClockIn = employee.last_clock_in_allowed_ip || employee.allowed_clock_in_ip || "";
+  const isOtherIp = !!usedIp && !!allowedAtClockIn && usedIp !== allowedAtClockIn;
+  return { employment, shift, ip, usedIp, allowedAtClockIn, isOtherIp };
+};
 
 export default function EmployeeList() {
   const { toast } = useToast();
@@ -78,7 +117,7 @@ export default function EmployeeList() {
   const [profileOpen, setProfileOpen] = useState(false);
   const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
   const [employeeDocs, setEmployeeDocs] = useState<DocumentRecord[]>([]);
-  const [attendanceRows, setAttendanceRows] = useState<Array<{ work_date: string; check_in_at: string | null; check_out_at: string | null }>>([]);
+  const [attendanceRows, setAttendanceRows] = useState<ProfileAttendanceRow[]>([]);
   const [joinedDate, setJoinedDate] = useState<string>("-");
   const [profileLoading, setProfileLoading] = useState(false);
   const [attendanceRange, setAttendanceRange] = useState<AttendanceRange>("monthly");
@@ -119,7 +158,34 @@ export default function EmployeeList() {
       if (rolesError) throw rolesError;
 
       const normalizedProfiles = ((profileRows as any[]) ?? []).map((profile) => normalizeProfileRecord(profile));
-      setEmployees(filterEmployeeProfiles(normalizedProfiles, roleRows ?? []));
+      const filteredProfiles = filterEmployeeProfiles(normalizedProfiles, roleRows ?? []);
+      const userIds = filteredProfiles.map((profile) => profile.user_id).filter(Boolean) as string[];
+      const latestIpByUser = new Map<string, AttendanceIpRow>();
+
+      if (userIds.length) {
+        const { data: ipRows, error: ipError } = await supabase
+          .from("attendance_entries")
+          .select("user_id,work_date,check_in_at,clock_in_ip,allowed_clock_in_ip_at_clock_in")
+          .in("user_id", userIds)
+          .not("check_in_at", "is", null)
+          .order("check_in_at", { ascending: false });
+
+        if (!ipError) {
+          ((ipRows as AttendanceIpRow[]) ?? []).forEach((row) => {
+            if (!latestIpByUser.has(row.user_id)) latestIpByUser.set(row.user_id, row);
+          });
+        }
+      }
+
+      setEmployees(filteredProfiles.map((profile) => {
+        const latestIp = profile.user_id ? latestIpByUser.get(profile.user_id) : undefined;
+        return {
+          ...profile,
+          last_clock_in_ip: latestIp?.clock_in_ip ?? null,
+          last_clock_in_allowed_ip: latestIp?.allowed_clock_in_ip_at_clock_in ?? null,
+          last_clock_in_date: latestIp?.work_date ?? null,
+        };
+      }));
     } catch (err) {
       console.error("Failed to fetch employees:", err);
     } finally {
@@ -330,12 +396,12 @@ export default function EmployeeList() {
       const from = fromDate.toISOString().slice(0, 10);
       const to = toDate.toISOString().slice(0, 10);
 
-      const [{ data: docs, error: docsError }, { data: attendance, error: attendanceError }, { data: firstShift, error: firstShiftError }] = await withTimeoutFallback(
+      const [{ data: docs, error: docsError }, attendanceResult, { data: firstShift, error: firstShiftError }] = await withTimeoutFallback(
         Promise.all([
           supabase.from("documents").select("*").eq("user_id", employee.user_id).order("uploaded_at", { ascending: false }),
           supabase
             .from("attendance_entries")
-            .select("work_date,check_in_at,check_out_at")
+            .select("work_date,check_in_at,check_out_at,clock_in_ip,allowed_clock_in_ip_at_clock_in")
             .eq("user_id", employee.user_id)
             .gte("work_date", from)
             .lte("work_date", to)
@@ -353,11 +419,23 @@ export default function EmployeeList() {
       );
 
       if (docsError) throw docsError;
-      if (attendanceError) throw attendanceError;
+      let attendance = (attendanceResult as any)?.data as ProfileAttendanceRow[] | null;
+      const attendanceError = (attendanceResult as any)?.error;
+      if (attendanceError) {
+        const { data: fallbackAttendance, error: fallbackAttendanceError } = await supabase
+          .from("attendance_entries")
+          .select("work_date,check_in_at,check_out_at")
+          .eq("user_id", employee.user_id)
+          .gte("work_date", from)
+          .lte("work_date", to)
+          .order("work_date", { ascending: true });
+        if (fallbackAttendanceError) throw attendanceError;
+        attendance = fallbackAttendance as ProfileAttendanceRow[];
+      }
       if (firstShiftError) throw firstShiftError;
 
       setEmployeeDocs(((docs as any[]) ?? []).map((doc) => normalizeDocumentRecord(doc)));
-      setAttendanceRows((attendance as Array<{ work_date: string; check_in_at: string | null; check_out_at: string | null }>) ?? []);
+      setAttendanceRows(attendance ?? []);
       const firstShiftDate = (firstShift as any)?.work_date as string | undefined;
       setJoinedDate(firstShiftDate ? new Date(`${firstShiftDate}T00:00:00`).toLocaleDateString() : (employee.created_at ? new Date(employee.created_at).toLocaleDateString() : "-"));
     } catch (err: any) {
@@ -681,6 +759,7 @@ export default function EmployeeList() {
                 <TableHead className="cursor-pointer select-none" onClick={() => handleSort("email")}>Email <SortIcon col="email" /></TableHead>
                 <TableHead className="cursor-pointer select-none" onClick={() => handleSort("position")}>Position <SortIcon col="position" /></TableHead>
                 <TableHead>Phone</TableHead>
+                <TableHead>Applied Settings</TableHead>
                 <TableHead className="cursor-pointer select-none" onClick={() => handleSort("status")}>Status <SortIcon col="status" /></TableHead>
                 <TableHead className="cursor-pointer select-none" onClick={() => handleSort("created_at")}>Joined <SortIcon col="created_at" /></TableHead>
                 <TableHead>View</TableHead>
@@ -690,18 +769,20 @@ export default function EmployeeList() {
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell colSpan={8} className="text-center py-8">
+                  <TableCell colSpan={9} className="text-center py-8">
                     <Loader2 className="animate-spin mx-auto" />
                   </TableCell>
                 </TableRow>
               ) : paged.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
+                  <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">
                     No employees found
                   </TableCell>
                 </TableRow>
               ) : (
-                paged.map((employee) => (
+                paged.map((employee) => {
+                  const settings = formatEmployeeSettings(employee);
+                  return (
                     <TableRow key={employee.id ?? employee.user_id ?? employee.email}>
                     <TableCell className="font-medium">
                       <div className="flex items-center gap-2">
@@ -718,6 +799,18 @@ export default function EmployeeList() {
                     <TableCell>{employee.email || "-"}</TableCell>
                     <TableCell>{employee.position || "-"}</TableCell>
                     <TableCell>{employee.phone || "-"}</TableCell>
+                    <TableCell>
+                      <div className="space-y-0.5 text-xs">
+                        <p className="font-medium text-foreground">{settings.employment}</p>
+                        <p className="text-muted-foreground">Shift {settings.shift}</p>
+                        <p className={employee.restrict_clock_in_ip ? "text-amber-700" : "text-muted-foreground"}>{settings.ip}</p>
+                        {settings.usedIp ? (
+                          <p className={settings.isOtherIp ? "font-medium text-destructive" : "text-muted-foreground"}>
+                            Used IP: {settings.usedIp}{settings.isOtherIp ? " (other IP)" : ""}
+                          </p>
+                        ) : null}
+                      </div>
+                    </TableCell>
                     <TableCell>{statusBadge(employee.status)}</TableCell>
                     <TableCell className="text-muted-foreground">
                       {employee.created_at ? new Date(employee.created_at).toLocaleDateString() : "-"}
@@ -749,7 +842,8 @@ export default function EmployeeList() {
                       </Button>
                     </TableCell>
                   </TableRow>
-                ))
+                  );
+                })
               )}
             </TableBody>
           </Table>
@@ -906,6 +1000,62 @@ export default function EmployeeList() {
                       </Button>
                     </div>
                     <div className="mt-4 border-t pt-4 space-y-3">
+                      <p className="text-sm font-medium">Applied Settings</p>
+                      <div className="grid gap-2 rounded-md border bg-muted/30 p-3 text-sm sm:grid-cols-3">
+                        {(() => {
+                          const settings = formatEmployeeSettings({
+                            ...selectedEmployee,
+                            employment_type: profileForm.employment_type,
+                            working_hours: profileForm.employment_type === "part_time" ? Number(profileForm.working_hours) : null,
+                            shift_start: profileForm.shift_start,
+                            shift_end: profileForm.shift_end,
+                            restrict_clock_in_ip: profileRestrictClockInIp,
+                            allowed_clock_in_ip: profileAllowedClockInIp,
+                          });
+                          return (
+                            <>
+                              <div>
+                                <p className="text-xs text-muted-foreground">Employment</p>
+                                <p className="font-medium">{settings.employment}</p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-muted-foreground">Shift Timing</p>
+                                <p className="font-medium">{settings.shift}</p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-muted-foreground">Clock-in Network</p>
+                                <p className="font-medium">{settings.ip}</p>
+                                {settings.usedIp ? (
+                                  <p className={settings.isOtherIp ? "text-xs font-medium text-destructive" : "text-xs text-muted-foreground"}>
+                                    Last used IP: {settings.usedIp}{settings.isOtherIp ? " (other IP)" : ""}
+                                  </p>
+                                ) : null}
+                              </div>
+                            </>
+                          );
+                        })()}
+                      </div>
+                      <div className="rounded-md border p-3 text-sm">
+                        <p className="font-medium">Recent Clock-in IPs</p>
+                        <div className="mt-2 space-y-2">
+                          {attendanceRows.filter((row) => row.check_in_at).slice(-5).reverse().length === 0 ? (
+                            <p className="text-xs text-muted-foreground">No clock-ins found for this range.</p>
+                          ) : (
+                            attendanceRows.filter((row) => row.check_in_at).slice(-5).reverse().map((row) => {
+                              const allowedIp = row.allowed_clock_in_ip_at_clock_in || profileAllowedClockInIp;
+                              const isOtherIp = !!row.clock_in_ip && !!allowedIp && row.clock_in_ip !== allowedIp;
+                              return (
+                                <div key={`${row.work_date}-${row.check_in_at}`} className="flex flex-col gap-1 rounded-md bg-muted/30 p-2 sm:flex-row sm:items-center sm:justify-between">
+                                  <span className="text-xs text-muted-foreground">{new Date(`${row.work_date}T00:00:00`).toLocaleDateString()}</span>
+                                  <span className={isOtherIp ? "text-xs font-medium text-destructive" : "text-xs text-muted-foreground"}>
+                                    Used IP: {row.clock_in_ip || "Not captured"}{isOtherIp ? ` (allowed ${allowedIp})` : ""}
+                                  </span>
+                                </div>
+                              );
+                            })
+                          )}
+                        </div>
+                      </div>
                       <p className="text-sm font-medium">Clock-in IP Restriction</p>
                       <Label className="flex items-center gap-2 text-sm">
                         <input

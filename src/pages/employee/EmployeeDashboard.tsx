@@ -275,7 +275,7 @@ export default function EmployeeDashboard() {
       shiftEndDateTime.setDate(shiftEndDateTime.getDate() + 1);
     }
 
-    const autoCheckoutAtMs = shiftEndDateTime.getTime() + (15 * 60 * 1000);
+    const autoCheckoutAtMs = shiftEndDateTime.getTime();
     if (nowTick < autoCheckoutAtMs) return;
 
     autoCheckoutDoneFor.current = attendanceId;
